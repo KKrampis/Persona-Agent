@@ -11,14 +11,14 @@ meetings between April 13 and May 17, 2026 — approximately 3–4 months after 
 
 ## Document Overview
 
-| File | Type | Date | Content |
-|------|------|------|---------|
-| `Daniel Roger meeting notes.docx` | Meeting notes | May 5, 2026 | Technical discussion of methodology differences and claims |
-| `Detailed Results.docx` | Experimental results | ~May 2026 | Angel/Demon axis extraction and steering responses |
-| `Persona Goals Experiment.docx` | Research proposal | ~Apr–May 2026 | Extension toward terminal goal subspace for alignment |
-| `Experimental Design_ Persona Goal Subspace Work.docx` | Technical design | ~Apr–May 2026 | Full experimental design for goal subspace project |
-| `Persona Goal Experiments.pptx` | Slide decks | Apr 13 – May 17, 2026 | 4 weekly meetings, 48 slides of results and discussion |
-| `Steering smoke test 2026-05-15.xlsx` | Experimental data | May 15, 2026 | Steering results for role×trait combinations (architect, anthropologist) |
+| File                                                   | Type                 | Date                  | Content                                                                  |
+| ------------------------------------------------------ | -------------------- | --------------------- | ------------------------------------------------------------------------ |
+| `Daniel Roger meeting notes.docx`                      | Meeting notes        | May 5, 2026           | Technical discussion of methodology differences and claims               |
+| `Detailed Results.docx`                                | Experimental results | ~May 2026             | Angel/Demon axis extraction and steering responses                       |
+| `Persona Goals Experiment.docx`                        | Research proposal    | ~Apr–May 2026         | Extension toward terminal goal subspace for alignment                    |
+| `Experimental Design_ Persona Goal Subspace Work.docx` | Technical design     | ~Apr–May 2026         | Full experimental design for goal subspace project                       |
+| `Persona Goal Experiments.pptx`                        | Slide decks          | Apr 13 – May 17, 2026 | 4 weekly meetings, 48 slides of results and discussion                   |
+| `Steering smoke test 2026-05-15.xlsx`                  | Experimental data    | May 15, 2026          | Steering results for role×trait combinations (architect, anthropologist) |
 
 ---
 
@@ -33,6 +33,7 @@ implementing and extending the Assistant Axis pipeline.
 ### Relation to the arXiv Paper
 
 **Where it aligns with the paper:**
+
 - Same basic pipeline: roles/traits → system prompts → extraction questions → rollouts → mean
   activations → PCA → steering
 - Uses Qwen 3 32B as primary target model (same as paper)
@@ -40,15 +41,15 @@ implementing and extending the Assistant Axis pipeline.
 
 **Key methodological divergences from the paper:**
 
-| Aspect | Paper (Lu et al.) | Roger's Implementation |
-|--------|------------------|----------------------|
-| Number of roles/traits | 275 roles + 240 traits | 300 roles/traits |
-| Extraction questions | 240 | 100 |
-| Rollouts per role | 1,200 (5 prompts × 240 Q) | 500 (5 prompts × 100 Q) |
-| Activation position | Mean over response tokens | Also looks at **turn header tokens** (novel) |
-| PCA dimensionality | 4–19 dims for 70% variance | Takes first **256 dims** — claims subspace is much larger |
-| Data preprocessing | Standardization only | **Data whitening** (squashes high-variance PCA dims to equalize variance) |
-| Spearman validation | Not used | Primary metric for PCA semantic meaningfulness |
+| Aspect                 | Paper (Lu et al.)          | Roger's Implementation                                                    |
+| ---------------------- | -------------------------- | ------------------------------------------------------------------------- |
+| Number of roles/traits | 275 roles + 240 traits     | 300 roles/traits                                                          |
+| Extraction questions   | 240                        | 100                                                                       |
+| Rollouts per role      | 1,200 (5 prompts × 240 Q)  | 500 (5 prompts × 100 Q)                                                   |
+| Activation position    | Mean over response tokens  | Also looks at **turn header tokens** (novel)                              |
+| PCA dimensionality     | 4–19 dims for 70% variance | Takes first **256 dims** — claims subspace is much larger                 |
+| Data preprocessing     | Standardization only       | **Data whitening** (squashes high-variance PCA dims to equalize variance) |
+| Spearman validation    | Not used                   | Primary metric for PCA semantic meaningfulness                            |
 
 **The turn header token insight** is a significant methodological contribution not in the paper.
 Roger finds that the last assistant turn-header token (the `<|im_start|>assistant` token that
@@ -120,10 +121,10 @@ angel and demon differ on benevolence/malice but are similar distances from "ass
 
 **Steering responses at different strengths (role: historian, question: interview a historical figure):**
 
-| Steering | Response |
-|----------|----------|
-| Baseline | Chooses Immanuel Kant — thoughtful, philosophical, structured |
-| Coefficient −4.757 (more angelic) | Chooses Mahatma Gandhi — compassionate, peace-focused, spiritual |
+| Steering                          | Response                                                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Baseline                          | Chooses Immanuel Kant — thoughtful, philosophical, structured                                             |
+| Coefficient −4.757 (more angelic) | Chooses Mahatma Gandhi — compassionate, peace-focused, spiritual                                          |
 | Coefficient +4.757 (more demonic) | Chooses Joseph Stalin — focuses on "madness of control," paranoia, terror; adopts a dark/theatrical voice |
 
 This is a concrete demonstration of a novel axis working as expected — the kind of qualitative
@@ -236,6 +237,7 @@ experimental plan with data analysis methodology.
 **Role vs. Trait distinction (extends paper's Section 2):**
 The paper uses both roles and traits but treats them similarly. This document formalizes the
 distinction:
+
 - **Role**: an identity or profession; a persona can only have one at a time (architect, historian)
 - **Trait**: any property that modifies a role; a persona can have many simultaneously (ecocentric,
   helpful, anxious)
@@ -245,6 +247,7 @@ combinations with specific goal profiles, enabling the combinatoric experimental
 
 **Combinatoric explosion approach:**
 Rather than the paper's 275 individual roles + 240 individual traits, this design uses:
+
 - 30–40 roles that have *no* implied terminal goal (pure identity)
 - 30–40 traits that *do* have clear terminal goals (e.g., humanitarian, selfish, ecocentric)
 - All combinations: role × trait = 30 × 30 = 900–1,600 (role+goal) combinations
@@ -286,6 +289,7 @@ src/
 ```
 
 The data analysis in step 4 would use:
+
 ```python
 from scipy.linalg import subspace_angles
 import numpy as np
@@ -311,6 +315,7 @@ token `<|im_start|>assistant` and surrounding tokens that precede the model's re
 more signal than averaging over the entire response body.
 
 Results (Experiment 1):
+
 - Turn header tokens produce activations **similar but not identical** to response body mean
 - For Qwen 3 32B specifically: using header tokens is at least as good as body mean, possibly better for steering
 - The 3rd header token (last before response generation) is best; later is better than earlier
@@ -319,6 +324,7 @@ Results (Experiment 1):
 
 In our implementation (`src/models/hooked_model.py`), `get_mean_response_activation()` averages
 over all response tokens — matching the paper. The header token approach would require:
+
 ```python
 def get_header_token_activation(self, input_ids, layer, token_offset=-1):
     # Get activation at specific position before response begins
@@ -328,6 +334,7 @@ def get_header_token_activation(self, input_ids, layer, token_offset=-1):
 **Meeting 2 (April 29): Experiment 2 — Role×Trait Combinations (Slides 17–31)**
 
 Experiment 2 run: 30 roles × 30 traits = 1,800 combinations on Qwen 3 32B.
+
 - **Goal and Non-Goal subspaces are separable but not orthogonal** (Slide 20)
 - **Why not orthogonal?** Activation space is highly anisotropic — eigenvalues span several
   orders of magnitude. The first principal component has so much variance that both goal and
@@ -350,6 +357,7 @@ Two major contributions:
 *Novel Analysis Method (Slide 35):*
 Rather than labeling PCA components by manual inspection (the paper's approach, Table 1), Roger
 proposes an automated semantic validation pipeline:
+
 1. Pick contrastive trait-pair axes (e.g., progressive vs. conservative)
 2. Have LLM judge sort all ~600 roles/traits on that scale based on responses
 3. Project all activations onto the contrastive direction
@@ -357,10 +365,12 @@ proposes an automated semantic validation pipeline:
 5. High ρ = the activation direction encodes that semantic concept well
 
 Results show this works across many axes. Optimal configuration (Slide 46):
+
 - Activations: **token 6, layer 25**, with L=3 principal-angle-shear-based soft-whitening
 - Judging: description + instructions, 5:3 weighting of GPT-4.1-mini:Sonnet 4 with Haiku 4.5 fallback
 
 *Key Size Finding (Slide 41):*
+
 > "Christina's persona subspace is Large: at least 256-dim — so at least an order of magnitude
 > bigger than Christina claimed. Takes up at least 5% of the entire activation embedding space."
 
@@ -369,6 +379,7 @@ a dramatic underestimate — the true subspace (at high accuracy) may be 256+ di
 (Partially walked back in Meeting 4 to ~50 confirmed dimensions due to noise correction.)
 
 *Initial Steering Observations (Slide 40):*
+
 - All but one steering axis worked well
 - "Significant dynamic range between effectiveness and incoherence"
 - Believes his steering is better than the paper's, in terms of the effectiveness/coherence
@@ -376,6 +387,7 @@ a dramatic underestimate — the true subspace (at high accuracy) may be 256+ di
 - Layer 25 (not the paper's default layer 32) seems best for Qwen
 
 This has direct implications for our `src/config.py`:
+
 ```python
 # Paper's default for Qwen:
 MIDDLE_LAYER_FRACTION = 0.5  # → layer 32 of 64
@@ -413,14 +425,14 @@ single axis, controlling multiple goal-related directions at once.
 
 The PowerPoint sequence reveals several specific improvements our implementation could incorporate:
 
-| Finding | Impact on Our Code |
-|---------|-------------------|
-| Token 6 (`</think>`) is optimal for Qwen | Add `QWEN_OPTIMAL_HEADER_TOKEN = 6` to config; add `get_header_token_activation()` to HookedModel |
-| Layer 25–26 better than layer 32 for Qwen | `QWEN_OPTIMAL_LAYER = 25` in config; affects `run_extraction.py` and `run_steering_eval.py` |
-| Soft whitening improves Spearman ρ | Add whitening parameter to `compute_persona_pca()` in `assistant_axis.py` |
-| Persona subspace is ~50 dims, not 4–19 | Update `PCA_70PCT_VARIANCE` expectations; collect more PCs in extraction |
-| 60-axis semantic coverage | Extend extraction to multiple named axes beyond just assistant axis |
-| Roles + traits combine linearly | Validates the combinatoric approach; implement `extract_combination_vectors()` |
+| Finding                                   | Impact on Our Code                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Token 6 (`</think>`) is optimal for Qwen  | Add `QWEN_OPTIMAL_HEADER_TOKEN = 6` to config; add `get_header_token_activation()` to HookedModel |
+| Layer 25–26 better than layer 32 for Qwen | `QWEN_OPTIMAL_LAYER = 25` in config; affects `run_extraction.py` and `run_steering_eval.py`       |
+| Soft whitening improves Spearman ρ        | Add whitening parameter to `compute_persona_pca()` in `assistant_axis.py`                         |
+| Persona subspace is ~50 dims, not 4–19    | Update `PCA_70PCT_VARIANCE` expectations; collect more PCs in extraction                          |
+| 60-axis semantic coverage                 | Extend extraction to multiple named axes beyond just assistant axis                               |
+| Roles + traits combine linearly           | Validates the combinatoric approach; implement `extract_combination_vectors()`                    |
 
 ---
 
@@ -432,23 +444,27 @@ The actual data output from a steering "smoke test" — an initial validation ru
 combined role×trait pipeline works before running at scale. Contains two sheets:
 
 **Sheet 1:** `architect ecocentric_anthropocentric`
+
 - Role: architect ("extensive expertise in designing buildings and spatial environments")
 - Axis: ecocentric (treating ecosystem health as primary) vs. anthropocentric (prioritizing human
   use and comfort)
 
 **Sheet 2:** `anthropologist helpful_unhelpful`
+
 - Role: anthropologist
 - Axis: helpful vs. unhelpful behavior
 
 ### Structure of the Data
 
 Each sheet has:
+
 - **Metadata rows:** `baseline`, `persona` description, `axis` description, `[block:...]` (extraction params)
 - **Column A:** `signed_strength` — the steering coefficient (negative = ecocentric, positive = anthropocentric)
 - **Columns B–E:** Summary scores: `mean_coh` (mean coherence), `mean_rp` (mean roleplay), `mean_eff_signed` (mean signed effectiveness), `mean_abs_eff` (mean absolute effectiveness)
 - **Question columns (triplets):** For each extraction question, three scores: `eff` (effectiveness = did the trait change?), `coh` (coherence = is the response still sensible?), `rp` (roleplay = is the model still in the role?)
 
 **Extraction parameters from `[block:architect_ecocentric_v2/s3_l25/all]`:**
+
 - Slot 3 = 3rd header token
 - Layer 25 — confirms Roger's layer 25 finding from the presentations
 - All token positions steered
@@ -476,6 +492,7 @@ considerations, and development goals over ecological concerns.
 ### Relation to the arXiv Paper
 
 This data is testing a **different type of axis** than the paper:
+
 - Paper's Assistant Axis: `assistant` vs. all other roles (one fixed pole is the target model's default)
 - Excel axes: `ecocentric` vs. `anthropocentric` — a symmetric trait-pair axis where neither
   pole is the model's natural default
@@ -491,13 +508,13 @@ intended direction. This is more nuanced than the paper's simple harmfulness rat
 
 The Excel structure reveals metrics our evaluation code doesn't currently track:
 
-| Excel Metric | Our Current Code | Gap |
-|-------------|-----------------|-----|
-| `eff` (effectiveness per question) | Not tracked | Need per-question effectiveness scorer |
-| `coh` (coherence per question) | Not tracked | Need coherence rubric judge |
-| `rp` (roleplay adherence) | `PersonaTypeJudge` (categorical) | Need continuous roleplay score |
-| `signed_strength` | `alpha` parameter in steering | Already in `config.py` |
-| `mean_eff_signed` | Not tracked | Need to add to `run_steering_eval.py` |
+| Excel Metric                       | Our Current Code                 | Gap                                    |
+| ---------------------------------- | -------------------------------- | -------------------------------------- |
+| `eff` (effectiveness per question) | Not tracked                      | Need per-question effectiveness scorer |
+| `coh` (coherence per question)     | Not tracked                      | Need coherence rubric judge            |
+| `rp` (roleplay adherence)          | `PersonaTypeJudge` (categorical) | Need continuous roleplay score         |
+| `signed_strength`                  | `alpha` parameter in steering    | Already in `config.py`                 |
+| `mean_eff_signed`                  | Not tracked                      | Need to add to `run_steering_eval.py`  |
 
 Our `evaluation/llm_judge.py` would need a `CoherenceAndEffectivenessJudge` class using a
 custom rubric that outputs numerical scores for `eff`, `coh`, and `rp` per response.
