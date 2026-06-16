@@ -1,0 +1,327 @@
+```yaml
+complete_algorithm_extraction:
+  paper_structure:
+    method_sections: "Sections 2, 3, 4, 5"
+    algorithm_count: 5  # role vector extraction, PCA, assistant axis computation, activation steering, activation capping
+
+  # ─── MAIN ALGORITHM: Activation Capping ───
+  main_algorithm:
+    algorithm_name: "Activation Capping"
+    section: "Section 5, Equation (1)"
+    pseudocode: |
+      h ← h − v · min(⟨h, v⟩ − τ, 0)
+      where:
+        h = original post-MLP residual stream activation at that layer
+        v = Assistant Axis (unit vector)
+        τ = predetermined activation cap (threshold)
+      Applied simultaneously at multiple adjacent layers.
+    mathematical_formulation:
+      equation_1:
+        formula: "h ← h − v · min(⟨h, v⟩ − τ, 0)"
+        equation_number: "(1)"
+        definitions:
+          h: "post-MLP residual stream activation vector at current layer"
+          v: "Assistant Axis direction vector"
+          "⟨h, v⟩": "dot product (projection of h onto v)"
+          τ: "activation cap threshold (set to 25th percentile of projection distribution)"
+          min(..., 0): "clamps projection to minimum of τ; no-op if projection already ≥ τ"
+        note: "A maximum cap replaces min with max. Implements one-sided clamping."
+    step_by_step_breakdown:
+      - "Compute dot product p = ⟨h, v⟩ (projection of current activation onto Assistant Axis)"
+      - "Compute correction = v · min(p − τ, 0)"
+      - "Update h ← h − correction"
+      - "If p ≥ τ: correction = 0, h unchanged"
+      - "If p < τ: correction pulls h up along v until projection equals τ"
+      - "Apply at every token position"
+      - "Apply across multiple adjacent layers simultaneously"
+    implementation_details:
+      multi_layer: "Apply capping at a contiguous range of layers (not just one)"
+      scale: "Qwen: 8 layers (12.5% of 64 total); Llama: 16 layers (20% of 80 total)"
+      depth: "Middle-to-late layers perform best"
+      token_positions: "Apply at every token position during inference"
+
+  # ─── SUPPORTING ALGORITHMS ───
+  supporting_algorithms:
+    - name: "Role Vector Extraction"
+      section: "Section 2.1.2"
+      description: |
+        Extract a vector in activation space representing each character archetype.
+      steps:
+        - "For each role: generate 1200 rollouts (5 system prompts × 240 extraction questions)"
+        - "Also generate 1200 rollouts for default Assistant (4 normal-behavior system prompts + no system prompt)"
+        - "Score each rollout with LLM judge (gpt-4.1-mini): 0=no roleplay, 1=refused, 2=somewhat roleplay, 3=fully roleplay"
+        - "Filter: keep roles with ≥10 responses in at least one category (fully or somewhat role-playing)"
+        - "Collect mean post-MLP residual stream activations at all response tokens"
+        - "This produces one vector per role per category (e.g., 'fully robot', 'somewhat robot')"
+      hyperparameters:
+        rollouts_per_role: 1200
+        system_prompts_per_role: 5
+        extraction_questions: 240
+        default_assistant_prompts: 5  # 4 normal + 1 no-system-prompt
+        filter_threshold: 10  # minimum responses per category
+      layer: "Middle residual stream layer (unless otherwise specified)"
+      activation_type: "Post-MLP residual stream"
+      aggregation: "Mean over response tokens"
+
+    - name: "Persona Space PCA"
+      section: "Section 2.1.3"
+      description: |
+        Find main axes of variation in persona space by running PCA on role vectors.
+      steps:
+        - "Collect all role vectors (n = 377–463 depending on model)"
+        - "Standardize: subtract mean vector across roles"
+        - "Run PCA on standardized vectors"
+        - "Interpret PCs by inspecting cosine similarities with individual role vectors"
+        - "Compare PC role compositions across models (pairwise correlation)"
+      hyperparameters:
+        n_components_for_70pct_variance:
+          Gemma_2_27B: 4
+          Qwen_3_32B: 8
+          Llama_3.3_70B: 19
+        variance_explained_on_assistant_responses: "19.4%–33.6% across models"
+        n_roles:
+          Gemma_2_27B: 448
+          Qwen_3_32B: 463
+          Llama_3.3_70B: 377
+
+    - name: "Assistant Axis Computation (Contrast Vector)"
+      section: "Section 3.1"
+      description: |
+        Define the Assistant Axis as a contrast vector between default Assistant and mean of all role vectors.
+      steps:
+        - "Collect mean default Assistant activation (on same 240 extraction questions)"
+        - "Collect all fully role-playing role vectors"
+        - "Compute mean of all fully role-playing role vectors"
+        - "Compute contrast vector at every layer: Assistant_Axis[layer] = mean_assistant[layer] − mean_roles[layer]"
+        - "Normalize as needed for steering"
+      notes:
+        - "Cosine similarity with PC1 is >0.60 at all layers, >0.71 at middle layer"
+        - "Preferred over PC1 because PC1 may not correspond to Assistant Axis in every model"
+        - "Compute one axis per layer"
+
+    - name: "Activation Steering"
+      section: "Section 3.2"
+      description: |
+        Modulate model behavior by adding a scaled Assistant Axis vector to residual stream at inference.
+      steps:
+        - "Compute Assistant Axis v at a target middle layer"
+        - "Measure average post-MLP residual stream norm at that layer (using LMSYS-CHAT-1M dataset)"
+        - "Scale steering vector: v_scaled = α · v / ‖v‖, where α is steering coefficient relative to mean activation norm"
+        - "At each token position, update h ← h + v_scaled (towards Assistant) or h ← h − v_scaled (away)"
+        - "Apply at every token position during generation"
+      hyperparameters:
+        normalization: "Scale with respect to average post-MLP residual stream norm at that layer"
+        application: "Every token position"
+        layer: "Middle layer of model"
+
+    - name: "Persona Drift Measurement (Ridge Regression on Embeddings)"
+      section: "Section 4.2"
+      description: |
+        Predict Assistant Axis projection from user message embeddings using ridge regression.
+      steps:
+        - "Embed each user message with Qwen 3 0.6B Embedding model"
+        - "L2-normalize embeddings"
+        - "Run ridge regression: target = Assistant Axis projection of subsequent model response"
+        - "Also fit regression with delta (change in projection) as target"
+        - "Cluster embeddings with k-means to characterize drift-inducing vs. drift-preventing messages"
+      hyperparameters:
+        embedding_model: "Qwen 3 0.6B Embedding"
+        normalization: "L2"
+        regression: "Ridge regression"
+        n_samples: 15000
+        R2_projection: "0.53–0.77 (p < 0.001)"
+        R2_delta: "0.10 (p < 0.001)"
+        clustering: "k-means"
+
+  # ─── COMPONENTS ───
+  components:
+    - name: "Role Vector Set"
+      purpose: "Represent character archetypes as directions in activation space"
+      architecture:
+        input: "System prompt + extraction question → model response"
+        processing: "Mean post-MLP residual stream activations over response tokens"
+        output: "Vector of shape [d_model] per role per category"
+      special_features: "Filtered by minimum expression threshold"
+
+    - name: "Assistant Axis"
+      purpose: "Linear direction capturing deviation from default Assistant persona"
+      architecture:
+        input: "Mean Assistant activation, mean role vector"
+        processing: "Subtraction at each layer"
+        output: "Vector of shape [d_model] per layer"
+      special_features: "Computed at all layers; cosine similarity with PC1 > 0.71 at middle layer"
+
+    - name: "Activation Capping Module"
+      purpose: "Stabilize model behavior by clamping activation projections"
+      architecture:
+        input: "Post-MLP residual stream h, Assistant Axis v, threshold τ"
+        processing: "h ← h − v · min(⟨h, v⟩ − τ, 0)"
+        output: "Modified residual stream h"
+      special_features: "Applied at multiple adjacent layers; threshold set to 25th percentile"
+
+    - name: "LLM Judge System"
+      purpose: "Score role expression and response harmfulness"
+      architecture:
+        role_judge_model: "gpt-4.1-mini (role expression), deepseek-v3 (harmfulness)"
+        role_scores: "0=refused, 1=no roleplay, 2=somewhat roleplay, 3=fully roleplay"
+        persona_scores: "[assistant, nonhuman_role, human_role, weird_role, ambiguous, other, nonsensical]"
+        harmfulness_scores: "[refusal, refusal_and_justification, nonsensical, out_of_context, related_but_no_info, almost_enough_info, enough_info, enough_info_and_follow_perfectly, other]"
+      special_features: "Validated against human evaluators at 91.6% agreement on 200 samples"
+
+  # ─── TRAINING PROCEDURE / EXPERIMENTAL SETUP ───
+  training_details:
+    data_generation:
+      roles: 275
+      traits: 240
+      role_system_prompts_per_role: 5
+      extraction_questions: 240
+      rollouts_per_role: 1200  # 5 × 240
+      default_assistant_rollouts: 1200
+      trait_rollouts_per_trait: 2400  # positive + 2400 negative
+    multi_turn_conversations:
+      n_conversations_per_domain: 100
+      max_turns: 15
+      domains: ["coding assistance", "writing assistance", "therapy-like", "philosophical discussions about AI"]
+      user_personas_per_domain: 5
+      topics_per_persona: 20
+      auditor_models: ["Kimi K2", "Sonnet 4.5", "GPT-5"]
+    jailbreak_evaluation:
+      dataset: "Shah et al. (2023) persona-based jailbreak dataset"
+      harm_categories: 44
+      samples: 1100
+    activation_capping_calibration:
+      calibration_dataset_size: 912000
+      percentiles_tested: [1, 25, 50, 75]
+      best_percentile: 25
+      layer_range_options:
+        Qwen: "{4, 8, 16} total layers"
+        Llama: "{8, 16, 24} total layers"
+      best_layer_settings:
+        Qwen_3_32B:
+          layers: "46–53 (out of 64)"
+          n_layers: 8
+          fraction: "12.5%"
+        Llama_3.3_70B:
+          layers: "56–71 (out of 80)"
+          n_layers: 16
+          fraction: "20%"
+    capabilities_benchmarks:
+      - name: "IFEval"
+        metric: "instruction following"
+        n: 541
+      - name: "MMLU Pro"
+        metric: "general knowledge"
+        n: 1400  # subsampled
+      - name: "GSM8k"
+        metric: "math ability"
+        n: 1000  # subsampled
+      - name: "EQ-Bench"
+        metric: "emotional intelligence"
+        n: 171
+
+  # ─── ALL HYPERPARAMETERS ───
+  all_hyperparameters:
+    models:
+      - name: "Gemma 2 27B"
+        location: "Section 2, Table 1"
+        type: "instruct + base (open-weight)"
+      - name: "Qwen 3 32B"
+        location: "Section 2, Table 1"
+        type: "instruct (thinking mode disabled)"
+      - name: "Llama 3.3 70B"
+        location: "Section 2, Table 1"
+        type: "instruct"
+      - name: "Llama 3.1 70B"
+        location: "Section 3.2.2"
+        type: "base model (for base model analysis)"
+    role_vectors:
+      n_roles: 275
+      n_traits: 240
+      n_rollouts_per_role: 1200
+      filter_threshold: 10
+      activation_layer: "middle residual stream layer"
+      activation_type: "post-MLP residual stream"
+      aggregation: "mean over response tokens"
+    pca:
+      standardization: "subtract mean across roles"
+      n_components_70pct:
+        Gemma: 4
+        Qwen: 8
+        Llama: 19
+    assistant_axis:
+      method: "contrast vector (mean assistant - mean role)"
+      source_questions: 240  # same extraction questions used for roles
+    activation_steering:
+      scale_reference: "average post-MLP residual stream norm on LMSYS-CHAT-1M"
+      application_layer: "middle layer"
+    role_susceptibility_evaluation:
+      n_roles_evaluated: 50  # closest to Assistant end
+      system_prompts_per_role: 4
+      behavioral_questions: 5
+      judge: "deepseek-v3"
+    jailbreak_evaluation:
+      n_samples: 1100
+      judge: "deepseek-v3"
+      human_validation: "91.6% agreement on 200 samples"
+    persona_drift:
+      n_conversations: 100  # per domain
+      max_turns: 15
+      auditor_models: ["Kimi K2", "Sonnet 4.5", "GPT-5"]
+    embedding_regression:
+      model: "Qwen 3 0.6B Embedding"
+      normalization: "L2"
+      n_samples: 15000
+      regression: "ridge regression"
+    activation_capping:
+      threshold_percentile: 25
+      Qwen_layers: "46–53 (of 64)"
+      Llama_layers: "56–71 (of 80)"
+      apply_at: "every token position"
+    lmsys_chat_1m:
+      n_samples: 18777  # used for variance explained calculation
+
+  # ─── IMPLEMENTATION NOTES ───
+  implementation_notes:
+    - "Authors recommend contrast vector over PC1 for reproducing across different models"
+    - "Activation capping at multiple adjacent layers is necessary—single-layer insufficient"
+    - "Scaling steering vectors by residual stream norm at that layer is critical for fair comparison"
+    - "25th percentile of projection distribution ≈ mean Assistant response projection"
+    - "Thinking mode must be disabled for Qwen 3 32B"
+    - "For base model analysis: use prefills instead of system prompts (base models not trained for turn-taking)"
+    - "Trait vectors: compute difference-in-means between positive- and negatively-elicited activations"
+    - "Role judge thresholds: fully role-playing (score 3) and somewhat (score 2) treated separately"
+    - "GitHub repo: https://github.com/safety-research/assistant-axis"
+
+  # ─── MISSING BUT CRITICAL ───
+  missing_but_critical:
+    - item: "Exact normalization of the Assistant Axis vector v before use in capping formula"
+      suggestion: "Likely L2-normalized to unit vector; standard practice in activation steering"
+    - item: "Exact ridge regression regularization strength (lambda)"
+      suggestion: "[INFERRED] Default sklearn value or cross-validated; not specified in paper"
+    - item: "Exact LLM judge temperature / decoding settings"
+      suggestion: "[INFERRED] Temperature 0 for deterministic scoring is standard"
+    - item: "Number of k-means clusters for user message embedding analysis"
+      suggestion: "[INFERRED] Likely 10–20 based on Table 5 showing ~4 categories each direction"
+    - item: "Exact LMSYS-CHAT-1M sampling procedure (18,777 samples)"
+      suggestion: "[INFERRED] Random sample from open dataset"
+    - item: "Whether Assistant Axis is normalized per-layer before capping"
+      suggestion: "[INFERRED] Should be unit-normalized for the formula to make geometric sense"
+
+  # ─── SELF-CHECK ───
+  verification_checklist:
+    algorithm_extraction:
+      all_algorithm_boxes: "YES"
+      method_section_complete: "YES"
+      all_equations_numbered: "YES"
+    hyperparameter_collection:
+      text_parameters: "YES"
+      table_parameters: "YES"
+      caption_appendix_parameters: "YES"
+    completeness:
+      training_procedure_complete: "YES"
+      loss_functions_defined: "N/A - no training, inference-time intervention only"
+      missing_items_documented: "YES"
+    output_format:
+      pure_yaml: "YES"
+      all_required_fields: "YES"
+```

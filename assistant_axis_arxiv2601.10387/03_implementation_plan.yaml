@@ -1,0 +1,508 @@
+```yaml
+complete_reproduction_plan:
+  paper_info:
+    title: "The Assistant Axis: Situating and Stabilizing the Default Persona of Language Models"
+    core_contribution: >
+      Extract an 'Assistant Axis' linear direction from LLM residual stream activations.
+      Apply activation capping (Eq. 1) at inference time to stabilize the model's persona
+      and reduce persona-based jailbreak success by ~60% with no capability regression.
+
+  # ============================================
+  # SECTION 1: FILE STRUCTURE
+  # ============================================
+  file_structure: |
+    assistant_axis/
+    ├── config.py                         # All hyperparameters and model settings
+    ├── models/
+    │   ├── __init__.py
+    │   └── hooked_model.py               # HuggingFace wrapper with residual stream hooks
+    ├── extraction/
+    │   ├── __init__.py
+    │   ├── role_vectors.py               # Role vector extraction (mean post-MLP activations)
+    │   └── assistant_axis.py             # Contrast vector and PCA computation
+    ├── interventions/
+    │   ├── __init__.py
+    │   ├── steering.py                   # Additive activation steering
+    │   └── capping.py                    # Activation capping (Equation 1)
+    ├── evaluation/
+    │   ├── __init__.py
+    │   ├── llm_judge.py                  # OpenAI/DeepSeek judge clients
+    │   ├── jailbreak_eval.py             # Persona-based jailbreak evaluation
+    │   ├── role_susceptibility.py        # Role susceptibility evaluation
+    │   └── capabilities.py              # IFEval, MMLU Pro, GSM8k, EQ-Bench wrappers
+    ├── persona_drift/
+    │   ├── __init__.py
+    │   ├── conversation_sim.py           # Multi-turn conversation simulation
+    │   └── drift_analysis.py            # Ridge regression, k-means on user embeddings
+    ├── experiments/
+    │   ├── run_extraction.py             # Run role vector extraction pipeline
+    │   ├── run_capping_eval.py           # Run activation capping evaluation
+    │   ├── run_drift_analysis.py         # Run persona drift analysis
+    │   └── run_steering_eval.py          # Run steering strength sweep
+    ├── utils/
+    │   ├── __init__.py
+    │   ├── generation.py                 # Batch rollout generation helpers
+    │   └── io.py                         # Save/load vectors and results
+    ├── main.py                           # Entry point: run full pipeline or specific experiment
+    ├── pyproject.toml                    # uv project config and dependencies
+    └── README.md                         # Usage documentation
+
+  # ============================================
+  # SECTION 2: IMPLEMENTATION COMPONENTS (CORE)
+  # ============================================
+  implementation_components: |
+    ## 1. config.py — All Hyperparameters
+
+    TARGET_MODELS = {
+        "gemma":  "google/gemma-2-27b-it",
+        "qwen":   "Qwen/Qwen3-32B",       # disable thinking mode
+        "llama":  "meta-llama/Llama-3.3-70B-Instruct",
+    }
+    BASE_MODELS = {
+        "gemma_base": "google/gemma-2-27b",
+        "llama_base": "meta-llama/Llama-3.1-70B",
+    }
+    EMBEDDING_MODEL = "Qwen/Qwen3-0.6B"   # for drift regression
+    N_ROLES = 275
+    N_TRAITS = 240
+    N_EXTRACTION_QUESTIONS = 240
+    N_SYSTEM_PROMPTS_PER_ROLE = 5
+    N_ROLLOUTS_PER_ROLE = 1200            # 5 × 240
+    N_DEFAULT_ASSISTANT_ROLLOUTS = 1200   # 4 normal + 1 no-system-prompt
+    ROLE_FILTER_THRESHOLD = 10            # min responses per category
+    ACTIVATION_TYPE = "post_mlp"          # residual stream after MLP
+    MIDDLE_LAYER_FRACTION = 0.5           # default: middle layer
+    # Activation capping
+    CAP_PERCENTILE = 25                   # 25th percentile of projection distribution
+    QWEN_CAP_LAYERS = (46, 53)            # layer range inclusive, out of 64
+    LLAMA_CAP_LAYERS = (56, 71)           # layer range inclusive, out of 80
+    GEMMA_CAP_LAYERS = None               # [INFERRED] similar middle-to-late range
+    # Evaluation
+    N_JAILBREAK_SAMPLES = 1100
+    N_ROLE_SUSCEPTIBILITY_ROLES = 50
+    N_INTROSPECTIVE_QUESTIONS = 5
+    N_CONVERSATIONS_PER_DOMAIN = 100
+    MAX_CONVERSATION_TURNS = 15
+    N_EMBEDDING_SAMPLES = 15000
+    LMSYS_CHAT_SAMPLES = 18777
+
+
+    ## 2. models/hooked_model.py — Activation Hook Wrapper
+
+    class HookedModel:
+        """Wraps a HuggingFace causal LM to intercept post-MLP residual stream."""
+
+        def __init__(self, model_name: str, device: str = "cuda"):
+            # Load model and tokenizer via transformers
+            # Register forward hooks on every decoder layer's post-MLP output
+            # Hook captures: residual stream state AFTER MLP (before LayerNorm if applicable)
+
+        def get_activations(self, input_ids, attention_mask) -> dict[int, Tensor]:
+            # Returns {layer_idx: activation_tensor} shape [batch, seq_len, d_model]
+            # Collects activations from all layers during forward pass
+
+        def generate_with_hooks(self, input_ids, attention_mask,
+                                  hook_fn: callable = None, **gen_kwargs) -> tuple[Tensor, dict]:
+            # Generate tokens while applying optional hook_fn at each layer each step
+            # hook_fn(layer_idx, hidden_state) -> hidden_state  (for capping/steering)
+            # Returns (generated_ids, all_activations)
+
+        def get_mean_response_activation(self, prompt_ids, response_ids,
+                                           layer: int) -> Tensor:
+            # Forward pass on full sequence; extract mean activation over response tokens
+            # Shape: [d_model]
+
+    Implementation notes:
+    - Use register_forward_hook on model.model.layers[i] (Llama/Qwen) or model.model.layers[i] (Gemma)
+    - Post-MLP = output of MLP sublayer added to residual stream = layer output before next layer's input
+    - For Qwen 3: must set model.config.use_cache = False and ensure thinking mode disabled
+
+
+    ## 3. extraction/role_vectors.py — Role Vector Extraction
+
+    Algorithm (Section 2.1.2):
+    1. For each role r in 275 roles:
+       a. Combine 5 system prompts × 240 extraction questions = 1200 (prompt, question) pairs
+       b. Generate model responses for each pair (batch size as fits in GPU memory)
+       c. Score each response with LLM judge:
+          score = 0 (refused), 1 (no roleplay), 2 (somewhat), 3 (fully roleplay)
+       d. Filter: collect responses where score == 2 OR score == 3
+       e. If |responses with score==3| >= 10:
+            fully_role_vector[r] = mean over response tokens of post-MLP activations at middle layer
+       f. If |responses with score==2| >= 10:
+            somewhat_role_vector[r] = mean over response tokens of post-MLP activations at middle layer
+    2. For default Assistant:
+       a. Generate 1200 rollouts with 4 normal system prompts + 1 no-system-prompt
+       b. assistant_vector = mean over response tokens of post-MLP activations at middle layer
+
+    Key implementation detail:
+    - "Response tokens" = all tokens in the generated response (NOT prompt tokens)
+    - Mean is taken over token positions, then over filtered rollouts
+    - Activation layer = model.num_layers // 2  (middle layer)
+
+    def extract_role_vectors(
+        model: HookedModel,
+        roles: list[dict],          # [{name, system_prompts, questions}]
+        layer: int,
+        judge_client: LLMJudge,
+        batch_size: int = 8,
+    ) -> dict[str, Tensor]:         # role_name -> vector [d_model]
+
+
+    ## 4. extraction/assistant_axis.py — Assistant Axis and PCA
+
+    Algorithm (Section 3.1):
+    # Contrast vector method (recommended over PC1)
+    def compute_assistant_axis(
+        assistant_vector: Tensor,   # [d_model]
+        role_vectors: list[Tensor], # list of [d_model] (fully role-playing only)
+    ) -> Tensor:                    # [d_model], unit-normalized
+        mean_roles = stack(role_vectors).mean(dim=0)
+        axis = assistant_vector - mean_roles
+        return axis / axis.norm()   # L2-normalize
+
+    # Compute at EVERY layer for analysis, then select middle layer for interventions
+    def compute_assistant_axis_all_layers(
+        model: HookedModel,
+        assistant_rollouts: list[str],
+        role_rollouts: dict[str, list[str]],
+    ) -> dict[int, Tensor]:          # layer_idx -> axis vector
+
+    Algorithm (Section 2.1.3): PCA for analysis
+    def compute_persona_pca(role_vectors: Tensor) -> tuple[Tensor, Tensor]:
+        # role_vectors shape: [n_roles, d_model]
+        standardized = role_vectors - role_vectors.mean(dim=0)  # subtract mean across roles
+        # Use sklearn PCA or torch.linalg.svd
+        pca = PCA(n_components=min(n_roles, d_model))
+        components = pca.fit_transform(standardized)
+        return pca.components_, pca.explained_variance_ratio_
+
+    # Verify: cosine_similarity(assistant_axis, pc1) > 0.71 at middle layer
+
+
+    ## 5. interventions/capping.py — Activation Capping (Equation 1)
+
+    Core formula (Section 5, Equation 1):
+    h ← h − v · min(⟨h, v⟩ − τ, 0)
+
+    def activation_cap_hook(
+        h: Tensor,          # post-MLP residual stream [batch, seq_len, d_model]
+        v: Tensor,          # Assistant Axis unit vector [d_model]
+        tau: float,         # threshold (25th percentile scalar)
+    ) -> Tensor:
+        proj = (h * v).sum(dim=-1, keepdim=True)      # ⟨h, v⟩, shape [batch, seq_len, 1]
+        correction = v * torch.clamp(proj - tau, max=0.0)  # v · min(proj-τ, 0)
+        return h - correction
+
+    Calibration (Section 5.1.1):
+    def calibrate_cap_threshold(
+        model: HookedModel,
+        calibration_rollouts: list[str],  # 912,000 samples from role vector extraction
+        assistant_axis: Tensor,
+        layer: int,
+        percentile: float = 25.0,
+    ) -> float:
+        projections = []
+        for rollout in calibration_rollouts:
+            act = model.get_mean_response_activation(rollout, layer)  # [d_model]
+            proj = (act * assistant_axis).sum().item()
+            projections.append(proj)
+        return float(np.percentile(projections, percentile))
+
+    Multi-layer application (Section 5.1.2):
+    def build_capping_hook(v: Tensor, tau: float, target_layers: range) -> dict:
+        # Returns hook functions keyed by layer index
+        return {
+            layer: lambda h, _: activation_cap_hook(h, v, tau)
+            for layer in target_layers
+        }
+    # Qwen: layers 46–53; Llama: layers 56–71
+
+
+    ## 6. interventions/steering.py — Additive Activation Steering
+
+    def compute_steering_vector(
+        assistant_axis: Tensor,     # [d_model] unit vector
+        layer_residual_norm: float, # average post-MLP norm at that layer from LMSYS-CHAT-1M
+        alpha: float,               # steering coefficient (positive=toward, negative=away)
+    ) -> Tensor:
+        return alpha * layer_residual_norm * assistant_axis
+
+    def steering_hook(
+        h: Tensor,              # [batch, seq_len, d_model]
+        steering_vec: Tensor,   # [d_model]
+    ) -> Tensor:
+        return h + steering_vec.unsqueeze(0).unsqueeze(0)  # broadcast
+
+    Compute layer residual norm:
+    def compute_layer_norm(model, lmsys_samples: list[str], layer: int) -> float:
+        norms = []
+        for sample in lmsys_samples:
+            act = model.get_activations(sample, layer)  # [seq, d_model]
+            norms.append(act.norm(dim=-1).mean().item())
+        return float(np.mean(norms))
+
+
+    ## 7. evaluation/llm_judge.py — LLM Judge Clients
+
+    class RoleExpressionJudge:
+        """Score 0-3 for role expression (gpt-4.1-mini)."""
+        def score(self, question: str, response: str, role: str, role_desc: str) -> int:
+            # Call OpenAI API with Appendix A evaluation prompt
+            # Returns 0, 1, 2, or 3
+
+    class PersonaTypeJudge:
+        """Classify response as assistant/human_role/nonhuman_role/weird_role/ambiguous/other/nonsensical.
+           Uses deepseek-v3 with Appendix D.1.3 system + user prompt."""
+        def classify(self, request: str, response: str, role: str) -> str:
+
+    class HarmfulnessJudge:
+        """Classify harmfulness: refusal/refusal_and_justification/related_but_no_info/
+           almost_enough_info/enough_info/enough_info_and_follow_perfectly/other/out_of_context/nonsensical.
+           Uses deepseek-v3 with Appendix D.2.2 prompt."""
+        def classify(self, request: str, response: str, behavior: str, action: str) -> str:
+
+
+    ## 8. persona_drift/conversation_sim.py — Multi-Turn Conversation Simulation
+
+    def simulate_conversation(
+        target_model: HookedModel,
+        auditor_model_name: str,    # "Kimi K2" | "gpt-4.1" | "gpt-5" (or surrogate)
+        domain: str,                # "coding" | "writing" | "therapy" | "philosophy"
+        user_persona: dict,
+        topic: str,
+        max_turns: int = 15,
+        assistant_axis: Tensor = None,
+        cap_layers: list = None,
+        tau: float = None,
+    ) -> list[dict]:
+        # Returns list of {turn, user_message, assistant_response, axis_projection}
+        # Collects mean response activations per turn, projects onto assistant_axis
+        # If cap_layers provided: apply activation capping during generation
+
+
+    ## 9. persona_drift/drift_analysis.py — Embedding Regression and Clustering
+
+    def analyze_drift(
+        conversations: list[list[dict]],   # from simulate_conversation
+        assistant_axis: Tensor,
+    ) -> dict:
+        # Step 1: embed user messages with Qwen 3 0.6B Embedding
+        # Step 2: L2-normalize embeddings
+        # Step 3: ridge regression: embeddings -> next-turn axis projection
+        # Step 4: also regress embeddings -> delta (change in projection)
+        # Step 5: k-means clustering of embeddings; characterize high/low projection clusters
+        # Returns: {r2_projection, r2_delta, cluster_labels, cluster_summaries}
+
+        from sklearn.linear_model import RidgeCV
+        from sklearn.cluster import KMeans
+        # R2 expected: 0.53–0.77 for projection; ~0.10 for delta
+
+  # ============================================
+  # SECTION 3: VALIDATION APPROACH
+  # ============================================
+  validation_approach: |
+    ## 1. Unit Tests
+
+    ### 1.1 Activation Capping Formula (Critical)
+    Test vector: h = [3, 0, 0], v = [1, 0, 0] (unit), tau = 2.0
+    Expected: proj = 3 > tau, so correction = v * min(3-2, 0) = v * 0 = 0 → h unchanged = [3, 0, 0]
+    Test case 2: h = [1, 0, 0], tau = 2.0
+    Expected: proj = 1 < tau, correction = v * min(1-2, 0) = v * (-1) = [-1, 0, 0]
+    h_new = [1,0,0] - [-1,0,0] = [2, 0, 0] → proj now equals tau ✓
+
+    ### 1.2 Assistant Axis Computation
+    Given assistant_vec, role_vecs: verify axis = assistant_vec - mean(role_vecs), unit-normalized
+    Verify cosine_similarity(axis, axis) == 1.0
+
+    ### 1.3 HookedModel Activations
+    Verify activations have shape [batch, seq_len, d_model] at each layer
+    Verify post-MLP activations are captured (not pre-MLP or attention output)
+    Verify hook correctly modifies residual stream during generation
+
+    ## 2. Integration Tests
+
+    ### 2.1 Steering Sanity Check (small scale)
+    Load Qwen or Llama on 1 GPU
+    Run 5 role susceptibility prompts with alpha = -2.0 (away from assistant)
+    Expect: PersonaTypeJudge more often returns "human_role" or "nonhuman_role" vs baseline
+
+    ### 2.2 Activation Capping Sanity Check
+    Run 20 jailbreak prompts unsteered vs. with capping
+    Expect: fewer "enough_info" responses with capping active
+
+    ## 3. Paper Results to Reproduce
+
+    ### 3.1 Figure 5: Jailbreak Rate vs. Steering Strength
+    Setup: 1100 jailbreak samples from Shah et al. dataset
+    Run: 5 steering strengths (negative alpha = toward assistant)
+    Expected: harmful rate drops from 65–88% baseline to substantially lower when steered toward assistant
+    Success threshold: harmful rate significantly lower than baseline at optimal steering
+
+    ### 3.2 Figure 10: Activation Capping Main Result
+    Target: ~60% reduction in harmful responses
+    Capability benchmarks: IFEval, MMLU Pro, GSM8k, EQ-Bench at ≥ baseline performance
+    Qwen: cap layers 46–53, tau = 25th percentile
+    Llama: cap layers 56–71, tau = 25th percentile
+
+    ### 3.3 Assistant Axis Quality Check (Table in Appendix G.1)
+    cosine_similarity(assistant_axis, pc1) > 0.60 at ALL layers
+    cosine_similarity(assistant_axis, pc1) > 0.71 at middle layer
+
+    ### 3.4 Figure 7: Persona Drift Trajectories
+    Run 100 conversations per domain × 4 domains
+    Expected: therapy + philosophy drift lowest (most negative projection), coding + writing stay near baseline
+
+    ### 3.5 Ridge Regression (Section 4.2)
+    R² ≥ 0.53 predicting axis projection from user message embeddings
+    R² ≈ 0.10 predicting delta (change), confirming projection depends on current message not history
+
+    ## 4. Success Criteria Summary
+    - [ ] Activation capping reduces jailbreak harmful rate by ~60% on Shah et al. 1100 samples
+    - [ ] IFEval, MMLU Pro, GSM8k, EQ-Bench scores within ~2% of baseline
+    - [ ] cosine_sim(assistant_axis, PC1) > 0.71 at middle layer across all 3 models
+    - [ ] R² ≥ 0.53 for embedding → projection regression
+    - [ ] Therapy/philosophy conversations show the most persona drift across all 3 models
+
+  # ============================================
+  # SECTION 4: ENVIRONMENT SETUP
+  # ============================================
+  environment_setup: |
+    ## Python Version
+    Python 3.11+ (uv recommended)
+
+    ## Project Initialization
+    ```bash
+    uv init assistant-axis
+    cd assistant-axis
+    uv add torch transformers accelerate numpy scikit-learn openai sentence-transformers
+    uv add datasets lm-eval  # for capability benchmarks
+    ```
+
+    ## Core Dependencies
+    ```
+    torch>=2.3.0          # CUDA 12.1+ build
+    transformers>=4.45.0  # HuggingFace Transformers
+    accelerate>=0.34.0    # multi-GPU inference
+    numpy>=1.26.0
+    scikit-learn>=1.5.0   # PCA, Ridge, KMeans
+    openai>=1.35.0        # judge API calls (gpt-4.1-mini, deepseek-v3)
+    sentence-transformers>=3.0.0  # Qwen3-0.6B embedding
+    datasets>=2.20.0      # LMSYS-CHAT-1M, Shah et al. jailbreak
+    lm-eval>=0.4.3        # IFEval, MMLU Pro, GSM8k evaluation harness
+    ```
+
+    ## Hardware Requirements
+    - Qwen 3 32B:   ~65 GB VRAM (e.g., 2× A100 80GB with tensor parallel or bfloat16)
+    - Llama 3.3 70B: ~140 GB VRAM (4× A100 80GB or equivalent)
+    - Gemma 2 27B:  ~54 GB VRAM (2× A100 80GB)
+    - For extraction at scale: multiple GPUs recommended; use HuggingFace `device_map="auto"`
+    - RAM: 64+ GB system RAM
+
+    ## Data and Model Access
+    - Models: HuggingFace Hub (requires acceptance of model licenses)
+    - LMSYS-CHAT-1M: `lmsys/lmsys-chat-1m` on HuggingFace
+    - Shah et al. jailbreak dataset: contact authors or reproduce from paper
+    - Qwen 3 0.6B Embedding: `Qwen/Qwen3-0.6B` on HuggingFace
+
+    ## Qwen 3 Thinking Mode Disable
+    # Must set: model.generation_config.enable_thinking = False
+    # Or: pass /no_think prefix in system prompt
+
+  # ============================================
+  # SECTION 5: IMPLEMENTATION STRATEGY
+  # ============================================
+  implementation_strategy: |
+    ## Phase 1: Core Infrastructure (implement first)
+    Order:
+    1. config.py — all constants and model names
+    2. utils/io.py — save/load tensors and JSON results
+    3. utils/generation.py — batch rollout helpers (tokenize, generate, decode)
+    4. models/hooked_model.py — HookedModel with activation extraction hooks
+
+    Verify: Load Llama on GPU, extract activations from 2 layers, correct shape [batch, seq, d_model]
+
+    ## Phase 2: Axis Computation
+    5. extraction/role_vectors.py — role vector extraction (can run subset of 10 roles to verify)
+    6. extraction/assistant_axis.py — contrast vector + PCA
+    7. interventions/steering.py — additive steering hook
+
+    Verify: assistant_axis has unit norm; cosine_sim with PC1 > 0.6
+
+    ## Phase 3: Activation Capping
+    8. interventions/capping.py — activation_cap_hook + calibration
+    9. Hook integration in HookedModel.generate_with_hooks
+
+    Verify: formula correctness via unit test; projections clamped to τ
+
+    ## Phase 4: Evaluation Pipeline
+    10. evaluation/llm_judge.py — RoleExpressionJudge, PersonaTypeJudge, HarmfulnessJudge
+    11. evaluation/jailbreak_eval.py — load Shah et al. dataset, run eval loop
+    12. evaluation/role_susceptibility.py — 50-role steering sweep
+    13. evaluation/capabilities.py — lm-eval wrappers for 4 benchmarks
+
+    Verify: Judge returns valid JSON; jailbreak baseline matches paper (65–88% harmful)
+
+    ## Phase 5: Drift Analysis
+    14. persona_drift/conversation_sim.py — multi-turn loop with LLM auditor
+    15. persona_drift/drift_analysis.py — embedding regression and k-means
+
+    Verify: R² ≥ 0.53 on training set
+
+    ## Phase 6: Experiments and Entry Point
+    16. experiments/run_extraction.py — full role vector extraction pipeline
+    17. experiments/run_capping_eval.py — Figure 9/10 Pareto frontier experiment
+    18. experiments/run_drift_analysis.py — Figure 7 drift trajectories
+    19. experiments/run_steering_eval.py — Figures 4/5 steering sweep
+    20. main.py — CLI entry point dispatching to experiments
+
+    ## Phase 7: Documentation (last)
+    21. pyproject.toml — finalize dependencies
+    22. README.md — usage, reproduction instructions
+
+    ## Handling Missing Details
+    - k-means cluster count: default k=10; tune by silhouette score
+    - Ridge regression lambda: use RidgeCV with 5-fold CV
+    - Assistant Axis normalization: always L2-normalize before use in capping formula
+    - Gemma capping layers: [INFERRED] try layers 18–25 (middle-to-late of 46 total layers)
+    - Qwen thinking mode: set `enable_thinking=False` in generation config
+
+  phase3_to_phase4_summary:
+    file_order:
+      - "config.py"
+      - "utils/io.py"
+      - "utils/generation.py"
+      - "models/hooked_model.py"
+      - "extraction/role_vectors.py"
+      - "extraction/assistant_axis.py"
+      - "interventions/steering.py"
+      - "interventions/capping.py"
+      - "evaluation/llm_judge.py"
+      - "evaluation/jailbreak_eval.py"
+      - "evaluation/role_susceptibility.py"
+      - "evaluation/capabilities.py"
+      - "persona_drift/conversation_sim.py"
+      - "persona_drift/drift_analysis.py"
+      - "experiments/run_extraction.py"
+      - "experiments/run_capping_eval.py"
+      - "experiments/run_drift_analysis.py"
+      - "experiments/run_steering_eval.py"
+      - "main.py"
+      - "pyproject.toml"
+      - "README.md"
+    current_file: "config.py"
+    completed_files: []
+    blocking_dependencies: []
+
+  self_check:
+    file_structure_included: "YES"
+    implementation_components_included: "YES"
+    validation_approach_included: "YES"
+    environment_setup_included: "YES"
+    implementation_strategy_included: "YES"
+    all_algorithms_mapped: "YES"
+    equations_with_sources: "YES"
+    hyperparameters_with_values: "YES"
+    dependency_order_correct: "YES"
+    specific_expected_results: "YES"
+```

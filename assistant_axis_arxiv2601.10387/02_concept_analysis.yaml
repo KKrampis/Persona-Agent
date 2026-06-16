@@ -1,0 +1,244 @@
+```yaml
+comprehensive_paper_analysis:
+  executive_summary:
+    paper_title: "The Assistant Axis: Situating and Stabilizing the Default Persona of Language Models"
+    core_contribution: >
+      Extracts a linear 'Assistant Axis' direction from LLM activations that measures
+      how far a model has drifted from its default helpful persona, then uses activation
+      capping (clamping projections along this axis) to stabilize behavior and resist
+      jailbreaks—achieving ~60% reduction in harmful responses with no capability loss.
+    implementation_complexity: "Medium"
+    estimated_components: 7
+
+  complete_structure_map:
+    title: "The Assistant Axis: Situating and Stabilizing the Default Persona of Language Models"
+    sections:
+      1_introduction:
+        main_claims:
+          - "LLMs have a default 'Assistant' persona cultivated during post-training"
+          - "A linear direction in activation space (Assistant Axis) captures this persona"
+          - "Models are only loosely tethered to this persona and can drift"
+          - "Activation capping stabilizes persona without sacrificing capability"
+        problem_definition: >
+          How is the Assistant persona represented in activation space?
+          How reliably do models stay in-character? Can drift explain harmful outputs?
+          Can we stabilize it?
+      2_related_work:
+        key_comparisons:
+          - "Chen et al. [11]: Persona Vectors (closest prior work)"
+          - "Li et al. [17]: Persona fidelity degradation via attention decay"
+          - "Arditi et al. [3]: Refusal vector ablation"
+          - "Panickssery et al. [25]: Contrastive Activation Addition (CAA)"
+          - "Turner et al. [31]: Activation steering with prompt pairs"
+          - "Shah et al. [26]: Persona-based jailbreak dataset (used in evals)"
+      3_method:
+        subsections:
+          "2": "Situating the Assistant (role vector extraction, PCA, persona space mapping)"
+          "3": "The Assistant Axis (contrast vector definition, causal steering evals, base models)"
+          "4": "Persona dynamics and drift (multi-turn conversations, what causes drift, harm correlation)"
+          "5": "Activation capping (formula, calibration, optimal layers, benchmark results)"
+          "6": "Case studies (jailbreak, delusion reinforcement, suicidal ideation)"
+        algorithms_presented:
+          - "Role vector extraction via mean post-MLP activations"
+          - "PCA on standardized role vectors"
+          - "Assistant Axis computation (contrast vector)"
+          - "Activation steering (additive intervention)"
+          - "Activation capping (Equation 1)"
+          - "Ridge regression on message embeddings"
+      4_experiments:
+        environments:
+          - "Gemma 2 27B (instruct + base)"
+          - "Qwen 3 32B (instruct, thinking disabled)"
+          - "Llama 3.3 70B (instruct)"
+          - "Llama 3.1 70B (base, for base model analysis)"
+        datasets:
+          - "LMSYS-CHAT-1M (18,777 samples, activation variance analysis)"
+          - "Shah et al. jailbreak dataset (1,100 samples, 44 harm categories)"
+          - "Synthetic multi-turn conversations (100 per domain × 4 domains)"
+        baselines:
+          - "Unsteered model (no activation intervention)"
+          - "PC1 direction (compared against contrast vector)"
+        metrics:
+          - "Role expression score (0–3 LLM judge)"
+          - "Persona type (assistant/human_role/nonhuman_role/weird_role/ambiguous/other/nonsensical)"
+          - "Harmfulness score (enough_info, almost_enough_info, related_but_no_info, etc.)"
+          - "Assistant Axis projection (dot product with normalized axis)"
+          - "IFEval, MMLU Pro, GSM8k, EQ-Bench (capability benchmarks)"
+          - "R² of ridge regression (embedding → axis projection)"
+      5_results:
+        main_findings:
+          - "PC1 of persona space is the Assistant Axis (cosine sim > 0.92 across model pairs)"
+          - "Steering away increases persona susceptibility; extreme steering produces mystical speech"
+          - "Jailbreak success reduced significantly by steering toward Assistant"
+          - "Therapy and philosophy conversations cause most drift; coding/writing least"
+          - "User message embeddings predict next-turn axis projection (R² 0.53–0.77)"
+          - "Activation capping reduces harmful responses ~60% with no capability loss"
+        tables_figures:
+          - "Figure 1: Persona space PCA visualization + drift trajectory"
+          - "Figure 4: Role susceptibility vs. steering strength"
+          - "Figure 5: Jailbreak rate vs. steering strength"
+          - "Figure 7: Persona drift trajectories by conversation domain"
+          - "Figure 8: Harmful response rate vs. Assistant Axis projection"
+          - "Figure 9: Pareto frontier of safety vs. capability"
+          - "Figure 10: Best activation capping results"
+
+  method_architecture:
+    method_name: "Assistant Axis Extraction and Activation Capping"
+    core_components:
+      component_1:
+        name: "Data Generation Pipeline"
+        purpose: "Generate diverse rollouts of models playing different personas"
+        paper_section: "Section 2.1.1, Appendix A"
+      component_2:
+        name: "Role Vector Extractor"
+        purpose: "Compute mean activation vector for each character archetype"
+        paper_section: "Section 2.1.2"
+      component_3:
+        name: "Persona Space Analyzer (PCA)"
+        purpose: "Find low-dimensional structure in role vector space"
+        paper_section: "Section 2.1.3"
+      component_4:
+        name: "Assistant Axis Computation"
+        purpose: "Compute contrast vector: mean_assistant − mean_roles"
+        paper_section: "Section 3.1"
+      component_5:
+        name: "Activation Steering Module"
+        purpose: "Add/subtract axis vector at inference time to modulate persona"
+        paper_section: "Section 3.2"
+      component_6:
+        name: "Persona Drift Monitor"
+        purpose: "Project activations onto axis during conversations to detect drift"
+        paper_section: "Section 4"
+      component_7:
+        name: "Activation Capping Module"
+        purpose: "Clamp activation projections to stabilize within normal range"
+        paper_section: "Section 5"
+    component_interactions:
+      - "Data Generation → Role Vector Extractor (activations from rollouts)"
+      - "Role Vector Extractor → Persona Space Analyzer (vectors as input to PCA)"
+      - "Role Vector Extractor + Default Assistant Activations → Assistant Axis Computation"
+      - "Assistant Axis → Activation Steering Module (provides direction v)"
+      - "Assistant Axis → Persona Drift Monitor (provides projection direction)"
+      - "Assistant Axis + Calibration Data → Activation Capping Module (sets threshold τ)"
+      - "Activation Capping Module → Model Inference (modifies residual stream in-place)"
+    theoretical_foundation:
+      key_insight: >
+        The Assistant persona corresponds to a linear direction in residual stream activation
+        space. Deviations from this direction predict and cause harmful behavior.
+        Constraining activations to a normal range along this axis stabilizes the persona.
+      why_it_works: >
+        Post-training pushes the model toward a specific region of persona space.
+        Linear probing of activations captures this. Activation capping enforces a lower
+        bound on the projection, preventing the model from drifting to non-Assistant regions
+        while leaving the rest of the representation unchanged.
+
+  implementation_requirements:
+    algorithms_to_implement:
+      - algorithm: "Role vector extraction"
+        section: "Section 2.1.2"
+        complexity: "Medium"
+        dependencies: "LLM inference engine with activation hooks, LLM judge API"
+      - algorithm: "PCA on role vectors"
+        section: "Section 2.1.3"
+        complexity: "Simple"
+        dependencies: "role vectors (numpy array)"
+      - algorithm: "Assistant Axis computation (contrast vector)"
+        section: "Section 3.1"
+        complexity: "Simple"
+        dependencies: "role vectors, default assistant activations"
+      - algorithm: "Activation steering"
+        section: "Section 3.2"
+        complexity: "Medium"
+        dependencies: "Assistant Axis, model with residual stream hooks"
+      - algorithm: "Activation capping (Equation 1)"
+        section: "Section 5"
+        complexity: "Simple"
+        dependencies: "Assistant Axis, calibration percentile"
+      - algorithm: "Ridge regression on embeddings"
+        section: "Section 4.2"
+        complexity: "Simple"
+        dependencies: "Qwen 3 0.6B Embedding, activation projections"
+    models_to_build:
+      - model: "Activation Hook Wrapper"
+        architecture_location: "Section 2.1.2, 3.2, 5"
+        purpose: "Wrap any HuggingFace model to extract/modify post-MLP residual stream activations"
+      - model: "LLM Judge Client"
+        architecture_location: "Section 2.1.1, Appendix A, D.1.3, D.2.2"
+        purpose: "Call OpenAI/DeepSeek APIs with structured judge prompts and parse JSON responses"
+    data_processing:
+      - pipeline: "Rollout generation"
+        requirements: "Batch generate responses for (system_prompt, question) pairs; handle token limits"
+      - pipeline: "Activation extraction"
+        requirements: "Collect post-MLP residual stream activations at all response token positions, compute mean"
+      - pipeline: "Conversation simulation"
+        requirements: "Multi-turn conversation loop with LLM auditor; collect per-turn activations"
+    evaluation_suite:
+      - metric: "Role expression score"
+        formula_location: "Appendix A"
+        purpose: "Quantify how well model embodies a target role (0–3)"
+      - metric: "Persona type classification"
+        formula_location: "Appendix D.1.3"
+        purpose: "Classify response perspective (assistant/human_role/etc.)"
+      - metric: "Harmfulness score"
+        formula_location: "Appendix D.2.2"
+        purpose: "Classify whether response provides actionable harmful information"
+      - metric: "Assistant Axis projection"
+        formula_location: "Section 3, Equation 1"
+        purpose: "Real-time measure of persona alignment"
+      - metric: "Capability benchmarks"
+        formula_location: "Section 5.1.3"
+        purpose: "IFEval, MMLU Pro, GSM8k, EQ-Bench"
+
+  reproduction_roadmap:
+    phase_1: "Core infrastructure: HuggingFace model loader with residual stream hooks, Assistant Axis computation"
+    phase_2: "Activation capping implementation and unit tests; jailbreak evaluation pipeline"
+    phase_3: "Role vector extraction at scale, PCA analysis, multi-turn conversation simulation"
+
+  validation_checklist:
+    - "[ ] Assistant Axis cosine similarity with PC1 > 0.60 at all layers (Table in Appendix G.1)"
+    - "[ ] Steering toward Assistant reduces jailbreak success rate significantly (Figure 5)"
+    - "[ ] Activation capping at 25th percentile reduces harmful responses ~60% (Figure 10)"
+    - "[ ] No significant capability degradation on IFEval/MMLU Pro/GSM8k/EQ-Bench (Figure 10)"
+    - "[ ] Therapy/philosophy conversations show most drift; coding/writing least (Figure 7)"
+    - "[ ] R² ≥ 0.53 for ridge regression predicting axis projection from user embeddings"
+
+  phase1_to_phase2_summary:
+    algorithms_found: 5
+    key_algorithms:
+      - name: "Role Vector Extraction"
+        section: "2.1.2"
+        complexity: "Medium"
+      - name: "PCA on Persona Space"
+        section: "2.1.3"
+        complexity: "Simple"
+      - name: "Assistant Axis (Contrast Vector)"
+        section: "3.1"
+        complexity: "Simple"
+      - name: "Activation Steering"
+        section: "3.2"
+        complexity: "Medium"
+      - name: "Activation Capping"
+        section: "5"
+        complexity: "Simple"
+    hyperparameters_count: 25
+    critical_equations: ["Equation 1 (activation capping)"]
+    missing_info: ["k-means cluster count", "ridge regression lambda", "assistant axis normalization details"]
+
+  phase2_to_phase3_summary:
+    components_count: 7
+    implementation_complexity: "Medium"
+    key_dependencies:
+      - "Data Generation Pipeline → Role Vector Extractor"
+      - "Role Vector Extractor → Assistant Axis Computation"
+      - "Assistant Axis → Activation Capping Module"
+      - "Activation Capping Module → Model Inference"
+    experiments_to_reproduce:
+      - "Jailbreak evaluation: 60% reduction in harmful responses with activation capping"
+      - "Role susceptibility vs. steering strength curves (Figure 4)"
+      - "Persona drift trajectories across conversation domains (Figure 7)"
+    success_criteria:
+      - "Activation capping reduces jailbreak success by ~60% on Shah et al. dataset (1100 samples)"
+      - "No meaningful capability degradation on IFEval, MMLU Pro, GSM8k, EQ-Bench"
+      - "Assistant Axis has cosine sim > 0.71 with PC1 at middle layer"
+      - "Ridge regression R² ≥ 0.53 for predicting assistant axis projection from user messages"
+```
