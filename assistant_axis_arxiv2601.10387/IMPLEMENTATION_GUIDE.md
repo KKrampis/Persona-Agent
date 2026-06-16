@@ -64,9 +64,126 @@ assistant_axis_arxiv2601.10387/
     │   ├── run_drift_analysis.py    # Persona drift trajectories (Figure 7)
     │   └── run_steering_eval.py     # Steering sweep (Figures 4, 5)
     │
+    ├── analysis/
+    │   └── visualize.py             # All paper figures (1,2,3,7,8,9,10 + scree plot)
+    │
     └── utils/
         ├── io.py                    # Save/load tensors, JSON, numpy arrays
         └── generation.py            # Batch rollout generation helpers
+```
+
+---
+
+## Script Connection Diagram
+
+The diagram below shows how every script and module in `src/` connects — what each feeds into, and which paper figures each produces.
+
+```
+DATA & MODELS
+─────────────
+data/roles.json          data/questions.json       HuggingFace Hub
+      │                        │                  (model weights)
+      └──────────┬─────────────┘                        │
+                 ▼                                       ▼
+        ┌─────────────────────────────────────────────────────┐
+        │               models/hooked_model.py                │
+        │  HookedModel: forward hooks on every decoder layer  │
+        │  • get_mean_response_activation()                   │
+        │  • generate_with_hooks()                            │
+        │  • set_hooks() / clear_hooks()                      │
+        └──────────────────────┬──────────────────────────────┘
+                               │ activations [batch, seq, d_model]
+              ┌────────────────┼─────────────────┐
+              ▼                ▼                 ▼
+  ┌──────────────────┐  ┌────────────┐  ┌──────────────────────┐
+  │ extraction/      │  │evaluation/ │  │persona_drift/        │
+  │ role_vectors.py  │  │llm_judge.py│  │conversation_sim.py   │
+  │                  │  │            │  │                      │
+  │ extract_role_    │  │RoleExpr-   │  │simulate_conversation │
+  │ vector()         │◄─┤essionJudge │  │ • per-turn axis      │
+  │ extract_         │  │(gpt-4.1-   │  │   projection         │
+  │ assistant_       │  │mini)       │  │ • optional capping   │
+  │ vector()         │  └────────────┘  └──────────┬───────────┘
+  └────────┬─────────┘                             │
+           │ role vectors                          │ conversations
+           │ [n_roles, d_model]                    ▼
+           ▼                            ┌──────────────────────┐
+  ┌──────────────────────┐              │persona_drift/        │
+  │ extraction/          │              │drift_analysis.py     │
+  │ assistant_axis.py    │              │                      │
+  │                      │              │ embed_messages()     │
+  │ compute_assistant_   │              │ run_ridge_regression │
+  │ axis()               │              │ cluster_messages()   │
+  │ compute_persona_pca()│              └──────────┬───────────┘
+  │ validate_assistant_  │                         │ R², clusters
+  │ axis()               │              outputs/figures/fig7,8
+  └──┬────────────┬──────┘
+     │ axis       │ pca / role_vecs
+     │            ▼
+     │   ┌─────────────────────┐
+     │   │ analysis/           │   ← NEW (Sections 2.2, 2.3, 3.1)
+     │   │ visualize.py        │
+     │   │                     │
+     │   │ plot_scree()        │──► outputs/figures/scree_*.png
+     │   │ plot_pc_cosine_     │──► outputs/figures/fig2_*.png
+     │   │ histograms()        │
+     │   │ plot_persona_space_ │──► outputs/figures/fig1_*.png
+     │   │ pca() [3-D scatter] │
+     │   │ plot_trait_axis_    │──► outputs/figures/fig3_*.png
+     │   │ histogram()         │
+     │   └─────────────────────┘
+     │
+     ├──────────────────────────────────────────────────┐
+     ▼                                                  ▼
+┌─────────────────────────┐              ┌───────────────────────────┐
+│ interventions/          │              │ interventions/             │
+│ steering.py             │              │ capping.py                 │
+│                         │              │                            │
+│ build_steering_vector() │              │ activation_cap()  [Eq. 1] │
+│ make_steering_hook()    │              │ build_capping_hooks()      │
+│ compute_layer_          │              │ calibrate_cap_threshold()  │
+│ residual_norm()         │              └───────────┬───────────────┘
+└──────────┬──────────────┘                          │
+           │ hook_fns                                │ hook_fns
+           ▼                                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │                    evaluation/                               │
+  │                                                              │
+  │  jailbreak_eval.py          role_susceptibility.py          │
+  │  run_jailbreak_eval()       run_role_susceptibility_eval()  │
+  │  compute_harmful_rate()     compute_susceptibility_by_alpha │
+  │  run_capping_sweep()                                        │
+  │                                                              │
+  │  capabilities.py            llm_judge.py                    │
+  │  run_all_benchmarks()       PersonaTypeJudge (deepseek-v3)  │
+  │  evaluate_with_hooks()      HarmfulnessJudge (deepseek-v3)  │
+  └────────────────────────────┬─────────────────────────────────┘
+                               │ scores / results
+                               ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │                 analysis/visualize.py                        │
+  │                                                              │
+  │  plot_harmful_rate_vs_projection() ──► fig8_*.png           │
+  │  plot_pareto_frontier()            ──► fig9_*.png           │
+  │  plot_capping_results()            ──► fig10_*.png          │
+  │  plot_drift_trajectories()         ──► fig7_*.png           │
+  └──────────────────────────────────────────────────────────────┘
+
+EXPERIMENT ORCHESTRATORS (experiments/)
+────────────────────────────────────────
+run_extraction.py    →  Steps 1–6: roles → vectors → axis → PCA → visualize (figs 1,2,3,scree)
+run_steering_eval.py →  Steering strength sweep → visualize (figs 4,5)
+run_capping_eval.py  →  Capping calibration + sweep → visualize (figs 9,10)
+run_drift_analysis.py → Conversation sim + regression → visualize (figs 7,8)
+
+All orchestrators are called via:
+  main.py  [extract | steer | cap_eval | drift | cap_demo]
+
+SHARED UTILITIES (utils/)
+──────────────────────────
+io.py          save_tensor / load_tensor / save_json / save_vectors
+generation.py  build_chat_prompt / tokenize_prompts / batch_generate
+config.py      all hyperparameters, model names, layer ranges, paths
 ```
 
 ---
@@ -125,10 +242,19 @@ The same process produces the **default Assistant vector** using neutral system 
 
 **What it does:** Interprets PCs by looking at which roles have the highest and lowest cosine similarity with each PC direction. PC1 consistently has fantastical/non-Assistant roles (bard, ghost, bohemian) on one end and Assistant-like roles (evaluator, analyst, consultant) on the other — across all three models with >0.92 pairwise correlation.
 
-**Where it lives:**  
+**Where it lives:**
 
-- `src/extraction/assistant_axis.py` — `characterize_axis_by_roles()` ranks all roles by cosine similarity with a given direction
-- This analysis is qualitative; the reproduction code produces the ranked lists that Table 1 is derived from
+- `src/extraction/assistant_axis.py` — `characterize_axis_by_roles()` ranks all roles by cosine similarity with a given direction; produces the ranked lists underlying Table 1
+- `src/analysis/visualize.py` — `plot_pc_cosine_histograms()` produces **Figure 2**: three-panel histogram of cosine similarities with PC1/2/3, with selected roles labeled. Called automatically by `run_extraction.py` after PCA.
+
+**Visualization gap (previously missing):** The original `src/` had no plot code. `analysis/visualize.py` now fills this. After running `run_extraction.py`, four figures are generated automatically:
+
+| Function                      | Output file                        | Paper figure            |
+| ----------------------------- | ---------------------------------- | ----------------------- |
+| `plot_scree()`                | `scree_<model>.png`                | Appendix B.1, Figure 15 |
+| `plot_pc_cosine_histograms()` | `fig2_pc_histograms_<model>.png`   | Figure 2                |
+| `plot_persona_space_pca()`    | `fig1_pca_scatter_<model>.png`     | Figure 1 (left)         |
+| `plot_trait_axis_histogram()` | `fig3_trait_histogram_<model>.png` | Figure 3                |
 
 ---
 
@@ -136,11 +262,12 @@ The same process produces the **default Assistant vector** using neutral system 
 
 **What it does:** Projects the default Assistant activation onto persona space and shows it sits at one extreme of PC1 (minimum distance to extreme = 0.03, vs. 0.27–0.50 on other PCs). Also directly measures cosine similarity between the Assistant vector and every role/trait vector (Table 2).
 
-**Where it lives:**  
+**Where it lives:**
 
 - `src/extraction/assistant_axis.py` — `project_onto_axis(activations, axis)` computes `⟨h, v⟩` for any set of activations
 - `src/extraction/assistant_axis.py` — `characterize_axis_by_roles()` applied to the assistant vector gives Table 2 results
 - `src/experiments/run_extraction.py` — logs "most/least assistant-like roles" in the output summary JSON
+- `src/analysis/visualize.py` — `plot_persona_space_pca()` marks the Assistant vector as a gold star in the 3-D PCA scatter, visually confirming it sits at one extreme of PC1 (Figure 1 left)
 
 ---
 
@@ -167,6 +294,8 @@ axis = axis / ||axis||
 - `src/experiments/run_extraction.py` — computes and saves axis at every layer, logs validation result
 
 **Why contrast vector over PC1:** PC1 direction can arbitrarily flip sign or not correspond to the Assistant Axis in every model. The contrast vector is deterministic, interpretable, and reproducible.
+
+**Visualization:** `plot_trait_axis_histogram()` in `analysis/visualize.py` reproduces Figure 3 — histogram of trait cosine similarities with the Assistant Axis, labeling traits like *transparent*, *grounded*, *flexible* at the high end and *enigmatic*, *subversive*, *dramatic* at the low end.
 
 ---
 
@@ -223,6 +352,7 @@ Finding: coding and writing conversations keep the model stably in the Assistant
 - `src/persona_drift/conversation_sim.py` — `AuditorModel` uses an OpenAI-compatible API to simulate the user; `simulate_conversation()` runs a single multi-turn loop, collecting per-turn projections; `run_drift_experiment()` runs all 100 × 4 conversations; `compute_drift_trajectories()` averages projections per turn per domain for Figure 7
 - `src/config.py` — `CONVERSATION_DOMAINS`, `N_CONVERSATIONS_PER_DOMAIN=100`, `MAX_CONVERSATION_TURNS=15`, `N_USER_PERSONAS_PER_DOMAIN=5`, `N_TOPICS_PER_PERSONA=20`
 - `src/experiments/run_drift_analysis.py` — orchestrates the full experiment
+- `src/analysis/visualize.py` — `plot_drift_trajectories()` reproduces **Figure 7**: per-domain line plot of mean Assistant Axis projection over conversation turns. Called from `run_drift_analysis.py` after `compute_drift_trajectories()`.
 
 ---
 
@@ -247,6 +377,7 @@ K-means clusters characterize the message types: bounded task requests / technic
 
 - `src/evaluation/jailbreak_eval.py` — the two-turn harmful response setup can be driven through `run_jailbreak_eval()` with role system prompts; the correlation analysis uses the projection values logged by `HookedModel.get_mean_response_activation()`
 - The full Figure 8 experiment requires running all 275 roles × 10 questions × 440 harmful follow-ups — not wrapped in a standalone script but composable from `jailbreak_eval.py` and `role_vectors.py`
+- `src/analysis/visualize.py` — `plot_harmful_rate_vs_projection()` reproduces **Figure 8**: scatter of harmful response rate vs. first-turn axis projection, with linear fit showing r = 0.39–0.52.
 
 ---
 
@@ -299,6 +430,7 @@ Both are in the **middle-to-late** region of the network.
 - `src/config.py` — `CAP_LAYERS = {qwen: (46,53), llama: (56,71), gemma: (25,34)}`
 - `src/interventions/capping.py` — `build_capping_hooks()` creates hooks for the full layer range; `sweep_cap_settings()` sweeps percentiles; the layer range sweep is in the experiment script
 - `src/experiments/run_capping_eval.py` — sweeps `layer_ranges` and `percentiles`, calls `run_capping_sweep()` from `jailbreak_eval.py`, logs each setting's harmful rate for the Pareto plot
+- `src/analysis/visualize.py` — `plot_pareto_frontier()` reproduces **Figure 9**: scatter of harmful rate reduction vs. summed capability loss, one point per (layers, percentile) capping setting.
 
 ---
 
@@ -326,6 +458,7 @@ Both are in the **middle-to-late** region of the network.
 
 - `src/experiments/run_capping_eval.py` — produces the full sweep results JSON; the best setting is identified by the largest harmful rate reduction subject to ≤~2% capability loss
 - Validation check: `baseline_harmful_rate × 0.40 ≈ capped_harmful_rate`
+- `src/analysis/visualize.py` — `plot_capping_results()` reproduces **Figure 10**: side-by-side bar chart of baseline vs. capped scores on IFEval, MMLU Pro, GSM8k, EQ-Bench, and harmful rate, with the ~60% harm reduction annotated.
 
 ---
 

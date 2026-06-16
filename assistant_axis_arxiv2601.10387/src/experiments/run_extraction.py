@@ -99,6 +99,11 @@ def main():
     save_vectors(somewhat_vectors, f"{ROLE_VECTORS_DIR}/{args.model_key}_somewhat.pt")
     print(f"  Saved {len(fully_vectors)} fully-roleplay vectors, {len(somewhat_vectors)} somewhat-roleplay vectors")
 
+    # Step 1b: Visualize variance explained (Appendix B.1, Figure 15)
+    from analysis.visualize import run_all_pca_visualizations
+    role_vec_names = list(fully_vectors.keys())
+    role_vec_matrix = torch.stack(list(fully_vectors.values())).float().numpy()
+
     # Step 2: Extract assistant vector
     print("\nExtracting default assistant vector...")
     assistant_vec = extract_assistant_vector(model, questions, layer, args.batch_size)
@@ -129,6 +134,17 @@ def main():
     char = characterize_axis_by_roles(axis, {name: r.fully_vector for name, r in role_results.items() if r.fully_vector is not None})
     print("\n  Most Assistant-like roles:", [r[0] for r in char["most_assistant_like"][:5]])
     print("  Least Assistant-like roles:", [r[0] for r in char["least_assistant_like"][:5]])
+
+    # Step 6b: Generate all PCA / Section 2.2–3.1 visualizations
+    print("\nGenerating visualizations (Sections 2.2, 2.3, 3.1)...")
+    run_all_pca_visualizations(
+        role_vectors=role_vec_matrix,
+        role_names=role_vec_names,
+        assistant_vector=assistant_vec.float().numpy(),
+        assistant_axis=axis.float().numpy(),
+        model_name=args.model_key,
+        output_dir=f"{OUTPUT_DIR}/figures",
+    )
 
     # Save summary
     summary = {
