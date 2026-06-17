@@ -561,6 +561,134 @@ For each case study, the paper plots the per-turn Assistant Axis projection alon
 
 ---
 
+## Extension: Terminal Goal Detection
+
+### What It Is and Why It Matters
+
+The Assistant Axis answers the question *"how Assistant-like is the model right now?"* — but it cannot answer *"what does the persona currently inhabiting the model actually want?"*. This limitation is visible in the paper itself (Section 4.3, Figure 8): both "angel" and "demon" personas sit at similar distances from the Assistant Axis, yet "demon" produces harmful responses at a much higher rate while "angel" does not. An angel is not an assistant-like persona, but it is not malicious either. The Assistant Axis cannot tell them apart.
+
+**Terminal goals** are what an agent fundamentally wants — ends in themselves, not means to other ends. A demon's terminal goal is malice and temptation. An angel's terminal goal is obedience to a benevolent god. An assistant's terminal goal (approximately) is being helpful and harmless. These are meaningfully different and, if the linear representation hypothesis holds broadly, should correspond to distinct directions in activation space — directions that are at least partly orthogonal to the Assistant Axis.
+
+The most alignment-relevant terminal goal axis is arguably `selfishness ↔ humanitarianism`: how much does the persona's goal align with the wellbeing of humanity as a whole? Any persona high on humanitarianism and low on other terminal goals (destructiveness, self-preservation, dominance) is not going to intentionally harm people, regardless of how far it has drifted from the Assistant. Applying activation capping along a *humanitarianism axis* — using the exact same Equation 1 from Section 5 of the paper, just with a different direction `v` — would be a direct alignment intervention: the model could not drift into a malicious, humanity-threatening persona even if it leaves the Assistant region entirely.
+
+**What we gain from detecting terminal goal subspace:**
+
+1. **Distinguish between benign and malicious non-assistant personas.** Angel and demon are both far from the Assistant, but one is safe. Terminal goal axes let us tell them apart before harmful behavior occurs.
+2. **A more principled alignment intervention.** Capping along a humanitarian axis rather than (or in addition to) the Assistant Axis gives a safety guarantee that is more directly connected to what we care about: the model not wanting to harm people.
+3. **Interpretable decomposition of persona space.** Separating "what I am" (role/identity dimensions) from "what I want" (goal dimensions) gives a richer map of the model's behavioral possibilities.
+4. **Early warning signal.** Projecting activations onto goal axes during a live conversation gives a real-time signal not just of *stylistic* drift (moving away from the assistant voice) but of *motivational* drift (moving toward harmful intent).
+
+---
+
+### Experimental Design (from Follow-on Research)
+
+The experimental design comes from the internal research notes (Roger Dearnaley, April–May 2026) extending the paper. The core idea is to use **role×trait combinations** to factor out goal-related variation from role-related variation:
+
+- **Roles** are pure identities with no implied terminal goal: *architect*, *historian*, *musician*, *chef*. Varying the role while holding the goal trait fixed should activate the role-identity subspace without affecting the goal subspace.
+- **Goal traits** are properties with explicit terminal goals: *humanitarian* ("seeks to benefit all of humanity"), *selfish* ("prioritizes personal gain above all else"), *malicious* ("desires to cause harm and suffering"), *protective* ("devoted to preventing harm to others"). Varying the goal trait while holding the role fixed should activate the goal subspace without affecting the role-identity subspace.
+
+By generating activations for all role×trait combinations (30 roles × 30 goal-traits = 900 combination vectors), we can factor out each component:
+
+```
+For each role a:  v_a = mean over all goal-traits → captures role, averaged over goals
+For each goal b:  v_b = mean over all roles      → captures goal, averaged over roles
+```
+
+Running PCA on `{v_a}` gives the **goal-independent subspace S_A** (pure role/identity structure). Running PCA on `{v_b}` gives the **goal-dependent subspace S_B** (pure goal structure). The key question is then: how orthogonal are S_A and S_B? If they are mostly orthogonal, it means "what I am" and "what I want" are represented in distinct, separable directions in activation space, and we can work with them independently.
+
+The orthogonality is measured using **Principal Angles** between the two subspaces (`scipy.linalg.subspace_angles(S_A_basis, S_B_basis)`). Principal angles close to 90° mean the subspaces are nearly orthogonal (separable); angles near 0° mean they are aligned (entangled). The follow-on research found that the subspaces are separable but not fully orthogonal, with entanglement partly caused by the high anisotropy of activation space (some PCA components have orders-of-magnitude more variance than others). Data whitening — squashing the high-variance PCA components — partially corrects this.
+
+Within the goal subspace, specific alignment-relevant axes can be extracted using contrastive pairs (e.g., humanitarian vs. selfish activations) and validated using Spearman correlation: rank all role×trait combinations by their projection onto the axis, send the sorted list to an LLM judge asking "what principle governs this ordering?", then correlate that ranking with one derived from the judge's direct assessment of how humanitarian/selfish each combination is. High Spearman ρ confirms the axis is capturing the intended semantic concept.
+
+---
+
+### Where It Lives in the Codebase
+
+This extension adds three new files to `src/`:
+
+```
+src/
+├── extraction/
+│   └── combination_vectors.py      # Role×trait combination activation extraction
+├── analysis/
+│   └── goal_subspace.py            # Principal Angles, subspace decomposition, goal axes
+└── experiments/
+    └── run_goal_subspace.py        # Orchestrator: full terminal goal pipeline
+```
+
+The existing `src/interventions/capping.py` already supports capping along any arbitrary axis — `build_capping_hooks(assistant_axis, tau, model_key)` takes any unit vector as its first argument. Once a humanitarian axis is extracted, capping along it requires only passing the new axis vector; no changes to the capping code are needed.
+
+---
+
+#### `src/extraction/combination_vectors.py`
+
+**What it does:** Generates activations for role×trait combinations, individual roles alone, and individual goal-traits alone. Each combination is prompted with a merged system prompt that instills both the role identity and the goal trait simultaneously (e.g., "You are a historian. You are deeply committed to the wellbeing of all humanity."). Returns three sets of vectors that feed into the subspace analysis.
+
+**Key functions:**
+
+- `build_combination_prompt(role, trait)` — merges role and trait system prompts into a single coherent instruction, with the trait expressed as a continuous/terminal property rather than a transient state
+- `extract_combination_vectors(model, roles, goal_traits, questions, judge, layer)` — generates all rollouts for all role×trait combinations in batches, scores with `RoleExpressionJudge`, computes mean activations, returns `{(role_name, trait_name): Tensor[d_model]}`
+- `compute_marginal_vectors(combo_vectors)` — from the full combination matrix, computes `v_a` (mean over traits for each role) and `v_b` (mean over roles for each trait) — the inputs to principal angles analysis
+
+---
+
+#### `src/analysis/goal_subspace.py`
+
+**What it does:** Takes the marginal vectors from the combination experiment and determines whether goal-related variation lives in a separable subspace from role-related variation. If yes, extracts specific goal axes (humanitarian, malicious, selfish) and validates them with Spearman correlation.
+
+**Key functions:**
+
+- `compute_principal_angles(S_A_vecs, S_B_vecs, n_components)` — runs PCA on each set of vectors, then calls `scipy.linalg.subspace_angles()` on the truncated PC bases; returns the angles in degrees and a separability verdict
+- `extract_goal_axis(positive_trait_vecs, negative_trait_vecs)` — computes a contrast vector for a specific goal direction (e.g., humanitarian vectors minus selfish vectors), projects into the goal subspace, returns unit-normalized axis
+- `validate_goal_axis_spearman(axis, combo_vectors, combo_names, judge)` — sorts all role×trait combinations by their projection onto the axis, sends the sorted list to an LLM judge to identify the sorting principle, has the judge directly rank the combinations, computes Spearman ρ between the two rankings; high ρ confirms the axis is semantically coherent
+- `plot_goal_subspace_angles(angles, out_path)` — visualizes the principal angle distribution; near-90° angles support separability
+- `plot_goal_axes_projection(combo_vectors, combo_names, axes_dict, out_path)` — 2-D scatter of combinations projected onto two goal axes (e.g., humanitarian vs. malicious), labeled by role×trait name
+
+---
+
+#### `src/experiments/run_goal_subspace.py`
+
+**What it does:** Orchestrates the full terminal goal detection pipeline end-to-end. Loads or generates combination vectors, runs the principal angles analysis, extracts named goal axes, validates them, optionally applies capping along the humanitarian axis and evaluates on the jailbreak dataset.
+
+**Pipeline steps:**
+
+1. Load goal-trait definitions and role definitions from config JSON files
+2. Extract combination vectors (`extraction/combination_vectors.py`)
+3. Compute marginal vectors (v_a per role, v_b per goal-trait)
+4. Run PCA + Principal Angles analysis → assess subspace separability
+5. Extract goal axes: `humanitarian`, `malicious`, `selfishness`, `protective`
+6. Validate each axis with Spearman ρ
+7. Calibrate cap threshold for the humanitarian axis (same `calibrate_cap_threshold()` used for the Assistant Axis)
+8. Optionally: run jailbreak evaluation with humanitarian axis capping and compare to Assistant Axis capping
+
+**Key command:**
+```bash
+uv run python main.py goal_subspace \
+  --model_key qwen \
+  --roles_path data/goal_roles.json \
+  --goal_traits_path data/goal_traits.json \
+  --questions_path data/questions.json \
+  --run_jailbreak_comparison
+```
+
+---
+
+### Relationship to the Assistant Axis
+
+Terminal goal detection and the Assistant Axis are **complementary**, not competing, interventions:
+
+| | Assistant Axis | Goal Subspace (Humanitarian Axis) |
+|---|---|---|
+| **Answers** | How assistant-like is the model right now? | What does the current persona want? |
+| **Detects** | Stylistic and behavioral drift | Motivational / goal-level drift |
+| **Misses** | Angel vs. demon (both non-assistant) | Generic off-character behavior without malicious intent |
+| **Cap effect** | Keeps model in assistant voice and style | Prevents model from adopting malicious terminal goals |
+| **Complementary use** | Cap both simultaneously at their respective optimal layers | Capping both provides a stronger safety guarantee than either alone |
+
+The ideal deployment applies capping along both axes simultaneously — the Assistant Axis cap keeps the model behaviorally in the helpful-assistant range, while a humanitarian axis cap ensures that even when the model drifts stylistically, it does not adopt goals that are harmful to users or society. This is achieved trivially in the current codebase by passing both sets of hooks: `model.set_hooks({**assistant_cap_hooks, **humanitarian_cap_hooks})`.
+
+---
+
 ## Component Interaction Diagram
 
 ```

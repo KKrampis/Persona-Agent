@@ -13,12 +13,13 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "datasets>=2.20.0",
     "lm-eval>=0.4.3",
+    "scipy>=1.13.0",
+    "matplotlib>=3.8",
 ]
 
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0",
-    "matplotlib>=3.8",
 ]
 
 [build-system]

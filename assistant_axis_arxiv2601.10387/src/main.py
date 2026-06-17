@@ -59,6 +59,28 @@ def cmd_steer(args):
     run()
 
 
+def cmd_goal_subspace(args):
+    from experiments.run_goal_subspace import main as run
+    argv = ["run_goal_subspace",
+            "--model_key", args.model_key,
+            "--roles_path", args.roles_path,
+            "--goal_traits_path", args.goal_traits_path,
+            "--questions_path", args.questions_path,
+            "--n_components", str(args.n_components),
+            "--whiten_top_n", str(args.whiten_top_n),
+            "--n_questions", str(args.n_questions)]
+    if args.skip_extraction:
+        argv.append("--skip_extraction")
+    if args.run_jailbreak_comparison:
+        argv.append("--run_jailbreak_comparison")
+        if args.jailbreak_dataset:
+            argv += ["--jailbreak_dataset", args.jailbreak_dataset]
+        if args.calibration_texts:
+            argv += ["--calibration_texts", args.calibration_texts]
+    sys.argv = argv
+    run()
+
+
 def cmd_cap_demo(args):
     """Quick demo: run a single prompt with and without activation capping."""
     import torch
@@ -135,6 +157,20 @@ def main():
     p.add_argument("--lmsys_texts", required=True)
     p.add_argument("--eval", choices=["roles", "jailbreaks", "both"], default="both")
 
+    # goal_subspace
+    p = subparsers.add_parser("goal_subspace", help="Terminal goal subspace detection")
+    p.add_argument("--model_key", default="qwen")
+    p.add_argument("--roles_path", required=True, help="JSON of goal-neutral roles")
+    p.add_argument("--goal_traits_path", required=True, help="JSON of goal traits with terminal goals")
+    p.add_argument("--questions_path", required=True, help="Extraction questions JSON")
+    p.add_argument("--n_components", type=int, default=15)
+    p.add_argument("--whiten_top_n", type=int, default=5)
+    p.add_argument("--n_questions", type=int, default=50)
+    p.add_argument("--skip_extraction", action="store_true")
+    p.add_argument("--run_jailbreak_comparison", action="store_true")
+    p.add_argument("--jailbreak_dataset", default=None)
+    p.add_argument("--calibration_texts", default=None)
+
     # cap_demo
     p = subparsers.add_parser("cap_demo", help="Demo activation capping on a single prompt")
     p.add_argument("--model_key", default="qwen")
@@ -146,6 +182,7 @@ def main():
         "cap_eval": cmd_cap_eval,
         "drift": cmd_drift,
         "steer": cmd_steer,
+        "goal_subspace": cmd_goal_subspace,
         "cap_demo": cmd_cap_demo,
     }
     if args.command not in dispatch:

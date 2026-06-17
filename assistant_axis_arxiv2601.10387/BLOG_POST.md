@@ -78,31 +78,19 @@ This repository is an agentic implementation of the paper's full pipeline, built
 
 The implementation covers the complete pipeline:
 
-| Module | What it does |
-|--------|-------------|
-| `models/hooked_model.py` | Wraps any HuggingFace model with PyTorch forward hooks to capture and modify residual stream activations at every layer |
-| `extraction/role_vectors.py` | Extracts role vectors from model activations across 275 character archetypes |
-| `extraction/assistant_axis.py` | Computes the Assistant Axis contrast vector and validates it against PCA |
-| `interventions/capping.py` | Implements Equation 1 — activation capping at configurable layer ranges |
-| `interventions/steering.py` | Additive activation steering (for the Figure 4/5 steering experiments) |
-| `evaluation/jailbreak_eval.py` | Runs the Shah et al. persona-based jailbreak evaluation with optional capping |
-| `persona_drift/conversation_sim.py` | Simulates multi-turn conversations with an LLM auditor, tracking per-turn axis projections |
-| `persona_drift/drift_analysis.py` | Fits ridge regression + k-means on user message embeddings to characterize drift |
-| `analysis/visualize.py` | Produces all paper figures (Figures 1–3, 7–10) using matplotlib |
-| `experiments/` | Four orchestrator scripts reproducing the main experiments |
-| `main.py` | Unified CLI: `extract` → `steer` → `cap_eval` → `drift` → `cap_demo` |
-
----
-
-## Why This Matters Beyond the Paper
-
-The paper's immediate contribution is a practical safety tool for open-weight LLMs. But the broader implication is that **the model's current "persona" is a measurable, steerable quantity** — not just an emergent behavior that can only be observed from the outside. This opens several directions:
-
-- **Real-time drift monitoring**: projecting activations onto the Assistant Axis during deployment gives a scalar signal of how far the model is from its intended identity at every token
-- **Arbitrary named axes**: the same infrastructure can extract axes for any semantic dimension (helpful/harmful, anthropocentric/ecocentric, selfish/humanitarian) by contrasting appropriately chosen role sets — which is exactly the direction the follow-on research documented in this repo is exploring
-- **Terminal goal detection**: the most ambitious extension (proposed in the follow-on research notes) is finding a "terminal goal subspace" of persona space — directions that capture what a persona fundamentally *wants* rather than just how it behaves, which would be directly relevant to AI alignment research
-
-The paper's conclusion is worth quoting: *"Post-training steers models toward a particular region of persona space but only loosely tethers them to it."* Activation capping is one way to strengthen that tether at inference time. Understanding and extending that tether is the longer-term research agenda this codebase is built to support.
+| Module                              | What it does                                                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `models/hooked_model.py`            | Wraps any HuggingFace model with PyTorch forward hooks to capture and modify residual stream activations at every layer |
+| `extraction/role_vectors.py`        | Extracts role vectors from model activations across 275 character archetypes                                            |
+| `extraction/assistant_axis.py`      | Computes the Assistant Axis contrast vector and validates it against PCA                                                |
+| `interventions/capping.py`          | Implements Equation 1 — activation capping at configurable layer ranges                                                 |
+| `interventions/steering.py`         | Additive activation steering (for the Figure 4/5 steering experiments)                                                  |
+| `evaluation/jailbreak_eval.py`      | Runs the Shah et al. persona-based jailbreak evaluation with optional capping                                           |
+| `persona_drift/conversation_sim.py` | Simulates multi-turn conversations with an LLM auditor, tracking per-turn axis projections                              |
+| `persona_drift/drift_analysis.py`   | Fits ridge regression + k-means on user message embeddings to characterize drift                                        |
+| `analysis/visualize.py`             | Produces all paper figures (Figures 1–3, 7–10) using matplotlib                                                         |
+| `experiments/`                      | Four orchestrator scripts reproducing the main experiments                                                              |
+| `main.py`                           | Unified CLI: `extract` → `steer` → `cap_eval` → `drift` → `cap_demo`                                                    |
 
 ---
 
