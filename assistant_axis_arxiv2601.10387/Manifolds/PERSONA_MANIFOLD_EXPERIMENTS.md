@@ -1,5 +1,114 @@
 # Persona Characteristics as Manifolds: Proposed Experiments
 
+---
+
+## Engels et al. (2025) — Paper Description and SAE Clustering Results
+
+**Full title:** "Not All Language Model Features Are Linear"
+**Authors:** Joshua Engels, Eric J. Michaud, Isaac Liao, Wes Gurnee, Max Tegmark (MIT / IAIFI)
+**Venue:** ICLR 2025 | arXiv:2405.14860 | Code: https://github.com/JoshEngels/MultiDimensionalFeatures
+
+### What the Paper Does
+
+The paper challenges the Linear Representation Hypothesis (LRH) — the widely held assumption that every meaningful concept in an LLM corresponds to a single direction in activation space. Instead it formalises and searches for **irreducible multi-dimensional features**: representations that cannot be decomposed into either independent or non-co-occurring lower-dimensional features.
+
+The core contribution is a three-step pipeline that uses SAEs to automatically discover such features:
+
+1. **Train a SAE** on LLM residual stream activations (GPT-2, all layers; Mistral 7B, layers 8/16/24).
+2. **Cluster the SAE dictionary elements D** by pairwise cosine similarity: build a complete graph on D, prune all edges below threshold T, take connected components as clusters. Each cluster spans an approximately T-orthogonal subspace — the key insight being that irreducible multi-dimensional features force the SAE to learn many dictionary elements spanning the same subspace, which therefore appear clustered.
+3. **Test each cluster for irreducibility** using two metrics:
+   - **ε-mixture index M_ε(f):** maximum fraction of points projectable near zero along any direction — high value = the feature cannot be projected away, i.e. it is truly multi-dimensional.
+   - **Separability index S(f):** minimum mutual information between any two sub-axes under all rotations — high value = the feature's axes are not statistically independent, i.e. it cannot be factored into simpler components.
+
+### Main SAE Clustering Results
+
+**Circular representations discovered automatically:**
+- In GPT-2 (all layers) and Mistral 7B (layers 8, 16, 24), clustering SAE dictionary elements by cosine similarity and inspecting the PCA of each cluster reveals smooth circular geometries for:
+  - **Days of the week** — Monday through Sunday arranged around a heptagon
+  - **Months of the year** — January through December arranged around a dodecagon
+  - **Years of the 20th century** — arranged along a U-shaped curve (not a perfect circle)
+- The first PCA dimension of each cluster acts as a radius/intensity direction (how strongly the feature fires); the circular position is encoded in PCA dimensions 2 and 3. The full structure is therefore a **cone**, not a flat circle.
+- These same circles appear across all layers of GPT-2 and at layers 8/16/24 of Mistral 7B.
+
+**Irreducibility scores (Figure 3):**
+- Out of 1,000 clusters in GPT-2, the manually identified days/months/years clusters rank **9th, 28th, and 15th** by the composite irreducibility score `(1 − M_ε) × S(f)`.
+- The "days" cluster scores: ε-mixture index ≈ 0.475 (high), separability index ≈ 0.95 (high).
+- This quantitatively confirms the circles are genuinely irreducible 2D features, not two 1D features in superposition.
+
+**Causal evidence — the circles are the fundamental unit of computation:**
+- Using a custom circular subspace patching technique (learning a circular probe P on PCA-reduced activations and using its pseudoinverse to intervene), patching only the 2D circular subspace achieves nearly the same effect as patching the entire layer for modular arithmetic tasks (Weekdays: "Two days from Monday is?"; Months: "Four months from January is?").
+- Results on Table 1: Llama 3 8B: 29/49 weekdays, 143/144 months; Mistral 7B: 31/49 weekdays, 125/144 months.
+- The SAE-plane probe (from clustering) is **more robust across layers** than a hand-trained circular probe: SAE probe applied to a neighboring layer achieves −2.32 average logit difference vs. −2.58 for the per-layer probe, suggesting the SAE finds more fundamental representations.
+
+**Continuity (Section 5.3):**
+- Injecting "very early Monday" or "very late Monday" context places activations near Sunday and Tuesday respectively on the Mistral layer 30 circle — confirming the circular representation encodes a genuinely continuous notion of time, not just 7 discrete class labels.
+
+**Limitations acknowledged:**
+- The paper finds relatively few interpretable multi-dimensional features (only days, months, years are clearly identified). Unclear whether this reflects a true scarcity of such features, a limitation of the 2D search, or failure of the clustering method at higher dimensionality.
+- The mixture/separability definitions are statistical rather than intervention-based, leaving open whether truly multi-dimensional representations exist beyond the circular cases shown.
+
+---
+
+## How the Engels Approach Applies to Persona Space
+
+### The Direct Translation
+
+The Engels pipeline was designed for temporal concepts (days, months) where the ground truth geometry is known (a circle). The key question for persona work is: **do persona characteristics have analogous intrinsic geometries that standard direction-based methods are missing?**
+
+The argument that they do rests on three observations:
+
+**1. Personas vary continuously along semantically meaningful dimensions.**
+The spectrum from "highly helpful assistant" to "mystical theatrical persona" observed during steering experiments is not a jump between two discrete states — it is a continuous trajectory through activation space. Similarly, "warmth," "dominance," "conscientiousness," and "agreeableness" are fundamentally continuous personality dimensions. If temporal concepts (years 1900–2000) form a U-shaped curve, there is every reason to expect personality dimensions to form smooth curves or surfaces.
+
+**2. Role families share internal structure that is invisible at the individual vector level.**
+The 275 roles in our extraction pipeline include semantically coherent families — professional helpers (tutor, mentor, therapist, coach, teacher), analytical thinkers (analyst, researcher, scholar, critic), and non-human entities (ghost, demon, wraith, leviathan). Within each family, roles vary along shared sub-dimensions. A standard SAE treating each role vector as an independent point cannot see this family-level geometry. Engels clustering, by grouping dictionary elements that span the same subspace, has a chance of recovering it.
+
+**3. The role-play gap is a manifold signature.**
+The phenomenon where model activations reflect a role's identity (prompt description aligns with the axis) but responses don't fully express it is exactly what Bhalla et al. describe as the "dilution regime": many SAE latents tile the manifold locally, each expressing a patch of it, so no single latent fully activates. This means the persona is represented as a manifold that the SAE is tiling rather than capturing — identical to the behaviour observed for age, temperature, and formality.
+
+### Concrete Application of Engels Clustering to Persona Vectors
+
+**Step 1 — Train SAE on persona-conditioned activations**
+Train a TopK SAE on the 912,000+ role-conditioned activation vectors already collected during the Assistant Axis extraction pipeline (all residual stream activations at the middle layer during role-conditioned rollouts). This is the same data used for calibrating the activation cap threshold.
+
+**Step 2 — Cluster dictionary elements by cosine similarity**
+Apply Engels's clustering algorithm: build a complete graph on the SAE decoder matrix D, set edge weights to pairwise cosine similarity, prune edges below threshold T (sweep T ∈ {0.1, 0.2, 0.3}), and take connected components. Each cluster is a candidate multi-dimensional persona feature.
+
+**Step 3 — Examine each cluster's PCA geometry**
+For each cluster, restrict SAE activations to that cluster's atoms and compute the PCA projection. Look for:
+- **Circular topology** — do professional helper roles (tutor, mentor, therapist, coach) arrange in a ring? This would imply the "helper-ness" feature has a circular structure encoding the specific flavour of helping.
+- **Spherical or toroidal topology** — do role clusters vary along two independent continuous dimensions (e.g., helper-warmth and helper-competence)?
+- **Linear topology** — does the assistant-to-non-assistant spectrum form a straight line or a curve in the restricted subspace?
+- **Cluster topology** — do semantically discrete role families (professional vs. fantastical) form separate blobs?
+
+**Step 4 — Apply irreducibility tests**
+For clusters with visually interesting geometry, compute:
+- ε-mixture index (cannot the feature be projected to near zero along any direction?)
+- Separability index (are the sub-axes statistically independent under any rotation?)
+High scores on both metrics confirm the cluster is a genuine multi-dimensional persona feature, not two independent linear features in superposition.
+
+**Step 5 — Causal validation via subspace patching**
+For any cluster identified as a candidate multi-dimensional persona feature:
+- Learn a circular (or appropriate geometric) probe P on the PCA-reduced cluster subspace
+- Use subspace patching (Eq. 6 from Engels): replace the circular subspace projection with that from a "clean" run at a different persona value
+- Test: does patching only the 2D persona subspace reproduce the same behavioral change as patching the full layer?
+- If yes: the SAE cluster has found a genuinely irreducible 2D unit of persona representation
+
+**Step 6 — Connect to the Assistant Axis**
+The crucial test: does the Assistant Axis (the global contrast vector computed in `extraction/assistant_axis.py`) align with the first PCA dimension of the most assistant-relevant cluster (like days-of-week first PCA = radius/intensity)? If so, the Assistant Axis captures the "intensity" of assistant-ness but not its directional structure within persona manifold — analogous to how the radius of the days circle captures "how much time matters" but not what day it is.
+
+### What New Insights This Could Yield
+
+| Current approach | What Engels clustering could reveal |
+|---|---|
+| Single Assistant Axis direction | First PC of a persona manifold; other PCs encode flavour of assistant-ness |
+| Activation capping moves along v | Capping along the first PC alone may create off-manifold artefacts; geometry-aware capping preserves the manifold |
+| Role vectors as independent points | Role families form sub-manifolds; inter-role distances encode semantic similarity within the manifold intrinsic metric |
+| 4–19 PCA dims explain 70% of variance | These dims may each correspond to a different persona manifold (helper-manifold, analyst-manifold, fantastical-manifold) rather than to independent trait axes |
+| Terminal goal subspace via Principal Angles | Goal dimensions may themselves be curved manifolds that Principal Angles analysis (which assumes flat subspaces) fails to recover |
+
+---
+
 ## Motivation
 
 The existing persona work in this repository (role vectors, Assistant Axis, PCA, activation capping) assumes the **Linear Representation Hypothesis**: every persona characteristic is a direction, role vectors are points in a flat space, and the Assistant Axis is a straight line. A growing body of evidence across the papers in your Zotero Manifolds collection suggests this is an incomplete picture — many semantically coherent concepts in LLMs are not one-dimensional directions but **curved, low-dimensional manifolds**.
@@ -156,3 +265,6 @@ Key evidence from the literature:
 | Sarfati et al., "The Shape of Beliefs" | Goodfire, 2026 | Beliefs are curved manifolds; linear steering moves off-manifold; geometry-aware (linear field probe) methods work better |
 | Costa et al., "From Flat to Hierarchical: MP-SAE" | NeurIPS 2025 | MP-SAE captures conditionally orthogonal hierarchical concepts that standard SAEs miss |
 | Michaud et al., "SAE Scaling with Feature Manifolds" | Goodfire/MIT, 2025 | Pathological SAE scaling regime when manifolds dominate; β < α means SAEs tile common manifolds instead of finding rare features |
+| Modell et al., "The Origins of Representation Manifolds in LLMs" | arXiv:2505.18235, 2025 | Theoretical foundations for why manifolds arise; cosine similarity encodes intrinsic manifold geometry; examples include tori, swiss-rolls, hierarchical trees |
+| Wang, "The Geometry of Persona: Disentangling Personality from Reasoning" | arXiv:2512.07092, 2024 | Personality traits occupy orthogonal linear subspaces (Soul Engine); T-SNE confirms distinct continuous personality manifolds; zero-shot personality injection via vector arithmetic |
+| Basile & Follows, "Quantifying Feature Space Universality via SAEs" | arXiv:2410.06981, 2024 | SAE feature spaces are universal across diverse LLMs; paired feature comparison; implies persona manifolds may be universal across model families |
