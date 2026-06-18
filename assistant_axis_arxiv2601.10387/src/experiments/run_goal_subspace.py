@@ -1,8 +1,8 @@
 """
 Experiment: Terminal Goal Subspace Detection.
 
-Implements the follow-on research design from Roger Dearnaley (April–May 2026),
-extending the Assistant Axis paper toward detecting what LLM personas actually *want*.
+Extends the Assistant Axis paper toward detecting what LLM personas actually *want*
+by finding a terminal goal subspace within persona activation space.
 
 Full pipeline:
   1. Load goal-role definitions (no terminal goals) and goal-trait definitions

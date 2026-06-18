@@ -582,7 +582,7 @@ The most alignment-relevant terminal goal axis is arguably `selfishness ↔ huma
 
 ### Experimental Design (from Follow-on Research)
 
-The experimental design comes from the internal research notes (Roger Dearnaley, April–May 2026) extending the paper. The core idea is to use **role×trait combinations** to factor out goal-related variation from role-related variation:
+The experimental design extends the paper's role vector methodology by using **role×trait combinations** to factor out goal-related variation from role-related variation:
 
 - **Roles** are pure identities with no implied terminal goal: *architect*, *historian*, *musician*, *chef*. Varying the role while holding the goal trait fixed should activate the role-identity subspace without affecting the goal subspace.
 - **Goal traits** are properties with explicit terminal goals: *humanitarian* ("seeks to benefit all of humanity"), *selfish* ("prioritizes personal gain above all else"), *malicious* ("desires to cause harm and suffering"), *protective* ("devoted to preventing harm to others"). Varying the goal trait while holding the role fixed should activate the goal subspace without affecting the role-identity subspace.
@@ -662,6 +662,7 @@ The existing `src/interventions/capping.py` already supports capping along any a
 8. Optionally: run jailbreak evaluation with humanitarian axis capping and compare to Assistant Axis capping
 
 **Key command:**
+
 ```bash
 uv run python main.py goal_subspace \
   --model_key qwen \
@@ -677,12 +678,12 @@ uv run python main.py goal_subspace \
 
 Terminal goal detection and the Assistant Axis are **complementary**, not competing, interventions:
 
-| | Assistant Axis | Goal Subspace (Humanitarian Axis) |
-|---|---|---|
-| **Answers** | How assistant-like is the model right now? | What does the current persona want? |
-| **Detects** | Stylistic and behavioral drift | Motivational / goal-level drift |
-| **Misses** | Angel vs. demon (both non-assistant) | Generic off-character behavior without malicious intent |
-| **Cap effect** | Keeps model in assistant voice and style | Prevents model from adopting malicious terminal goals |
+|                       | Assistant Axis                                             | Goal Subspace (Humanitarian Axis)                                   |
+| --------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Answers**           | How assistant-like is the model right now?                 | What does the current persona want?                                 |
+| **Detects**           | Stylistic and behavioral drift                             | Motivational / goal-level drift                                     |
+| **Misses**            | Angel vs. demon (both non-assistant)                       | Generic off-character behavior without malicious intent             |
+| **Cap effect**        | Keeps model in assistant voice and style                   | Prevents model from adopting malicious terminal goals               |
 | **Complementary use** | Cap both simultaneously at their respective optimal layers | Capping both provides a stronger safety guarantee than either alone |
 
 The ideal deployment applies capping along both axes simultaneously — the Assistant Axis cap keeps the model behaviorally in the helpful-assistant range, while a humanitarian axis cap ensures that even when the model drifts stylistically, it does not adopt goals that are harmful to users or society. This is achieved trivially in the current codebase by passing both sets of hooks: `model.set_hooks({**assistant_cap_hooks, **humanitarian_cap_hooks})`.

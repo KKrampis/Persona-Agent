@@ -12,9 +12,10 @@ Pipeline:
   4. If mostly orthogonal → subspaces are separable
   5. Extract named goal axes (humanitarian, malicious, selfish, protective)
      using contrast vectors within the goal subspace
-  6. Validate each axis with Spearman ρ (Roger Dearnaley's method from meeting notes)
+  6. Validate each axis with Spearman ρ (rank-correlation between activation projection order
+     and LLM-judge semantic ranking of same combinations)
 
-Key result from follow-on research (Dearnaley, May 2026):
+Key finding from preliminary experiments:
   "Goal and Non-Goal Subspaces Separable but not Orthogonal"
   Cause: activation space anisotropy (eigenvalues span several orders of magnitude)
   Partial fix: data whitening (squashing high-variance PCA components)
@@ -42,11 +43,11 @@ def fit_subspace(
     """
     Fit a PCA subspace to a list of vectors with optional partial whitening.
 
-    Partial whitening (Dearnaley's "soft whitening"):
+    Partial whitening ("soft whitening"):
       Squash the top n high-variance PCA components to have equal variance
       to the (n+1)-th component, leaving the rest unchanged.
       This corrects for activation space anisotropy without full whitening,
-      which was found to be harmful in the follow-on research.
+      which was found to be harmful in preliminary experiments.
 
     Returns: (basis [n_components, d_model], fitted PCA object)
     """
@@ -189,7 +190,7 @@ def validate_goal_axis_spearman(
     top_k: int = 30,
 ) -> dict:
     """
-    Validate a goal axis using Spearman ρ (Roger Dearnaley's method).
+    Validate a goal axis using Spearman ρ.
 
     Steps:
     1. Project all role×trait combination vectors onto the axis

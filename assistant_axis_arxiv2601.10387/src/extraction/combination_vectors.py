@@ -1,7 +1,7 @@
 """
 Role×trait combination vector extraction for terminal goal subspace analysis.
 
-Experimental design (Dearnaley, April–May 2026, extending Lu et al. 2026):
+Experimental design (extending Lu et al. 2026 toward terminal goal subspace detection):
 
 The key insight is that we can factor "what I am" (role/identity) from "what I want"
 (terminal goal) by using two types of inputs:
