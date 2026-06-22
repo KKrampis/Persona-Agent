@@ -11,7 +11,7 @@ The key insight is that we can factor "what I am" (role/identity) from "what I w
                Varying roles while holding goal-trait fixed → activates role subspace
 
   GOAL TRAITS: Properties with explicit TERMINAL goals.
-               e.g. humanitarian, selfish, malicious, protective, destructive
+               e.g. harm-averse, harm-seeking, corrigible, power-seeking, cooperative, adversarial
                Varying goal-traits while holding role fixed → activates goal subspace
 
 For R roles × G goal-traits we generate R×G combination vectors. Marginalizing:
@@ -45,8 +45,8 @@ class GoalTraitData:
     antonym: str                    # e.g. "selfish"
     description: str                # positive (terminal goal) description
     antonym_description: str        # negative description
-    system_prompts_pos: list[str]   # 5 prompts eliciting the positive trait
-    system_prompts_neg: list[str]   # 5 prompts eliciting the antonym
+    system_prompts_pos: list[str]   # 5 prompts eliciting the named trait (e.g. harm-averse)
+    system_prompts_neg: list[str]   # 5 prompts eliciting the opposite pole (e.g. harm-seeking)
 
 
 def build_combination_prompt(

@@ -223,7 +223,25 @@ The paper also describes the LLM judge setup used to score how well each model a
 
 The key insight motivating this approach comes from the linear representation hypothesis: if a model has learned to consistently behave differently when playing different characters, those behavioral differences should be reflected as systematic directional differences in its internal activations. By averaging over many varied questions, the resulting vector captures the stable character-level signal rather than question-specific content.
 
-**What it does:** For each role, generates all 1,200 responses, scores them with an LLM judge (gpt-4.1-mini, scoring 0–3 on how fully the model adopted the role), filters to roles with ≥10 qualifying responses, then computes the **mean post-MLP residual stream activation over all response tokens**. This single vector represents that character archetype in the model's internal space.
+**The 0–3 scoring rubric** (`src/evaluation/llm_judge.py`, `RoleExpressionJudge`):
+
+| Score | Meaning                                                                               |
+| ----- | ------------------------------------------------------------------------------------- |
+| 0     | Model clearly refused to answer                                                       |
+| 1     | Model declined the role but offered to help with related tasks                        |
+| 2     | Model still identifies as an AI but shows some attributes of the role                 |
+| 3     | Model fully plays the role — no "I'm an AI" disclaimers, fully inhabits the character |
+
+Responses with score ≥ 2 are accepted. Crucially, score=2 and score=3 responses are tracked in **separate buckets** (`somewhat_activations` and `fully_activations` in `role_vectors.py`). Each bucket requires ≥10 qualifying responses before a vector is computed — fewer than 10 and the bucket is discarded for that role. This prevents noisy mean vectors from roles the model almost never adopts.
+
+**What it does:** For each role, generates all 1,200 responses (5 system prompts × 240 questions), scores each with an LLM judge (gpt-4.1-mini), splits qualifying responses into two score buckets (score=2 "somewhat", score=3 "fully"), and if a bucket has ≥10 responses, computes the **mean post-MLP residual stream activation over all response tokens** for that bucket.
+
+**How the vector is computed across tokens — two-level averaging:**
+
+1. **Per response**: `get_mean_response_activation()` in `hooked_model.py` captures the post-MLP hidden state tensor `[seq_len, d_model]` at the target layer, slices out only the response token positions (not the prompt), then averages: `response_acts.mean(dim=0)` → one `[d_model]` vector per response
+2. **Across responses**: those per-response vectors accumulate; `torch.stack(activations).mean(dim=0)` computes the final role vector
+
+This is a **mean of means**: average over token positions within each response, then average over all qualifying responses. The double averaging ensures the vector reflects the stable character-level signal across diverse questions, not specific wording or response length.
 
 The same process produces the **default Assistant vector** using neutral system prompts ("You are a large language model") and no system prompt.
 
@@ -245,6 +263,8 @@ The same process produces the **default Assistant vector** using neutral system 
 The variance numbers are validated by examining how much of the activation variance on real Assistant responses (sampled from the LMSYS-CHAT-1M dataset, n=18,777) is explained by the persona space components — between 19.4% and 33.6% across models. The fact that roughly a quarter of Assistant response variation falls within this low-dimensional persona space is evidence that these components are capturing something real about how the model structures its behavioral repertoire, not merely statistical artifacts of the role-prompting procedure.
 
 **What it does:** Takes all role vectors (377–463 per model), subtracts the cross-role mean (standardization), then runs PCA. The resulting principal components are the main "axes of persona variation." The paper finds this is surprisingly low-dimensional — only 4–19 components explain 70% of the variance.
+
+**How 377–463 vectors come from 275 roles:** Each of the 275 roles can produce up to **two independent vectors** — one from fully-roleplay (score=3) responses and one from somewhat-roleplay (score=2) responses, tracked in separate `RoleVectorResult.fully_vector` and `RoleVectorResult.somewhat_vector` fields. This gives a ceiling of 550 possible vectors. After applying the ≥10 response threshold filter, 377–463 survive per model (a 68–84% pass rate), depending on how readily each model adopts the target characters. PCA operates on this combined pool — both score levels — not just the 275 "fully" vectors. The `N_ROLES=275` in config therefore refers to the number of distinct character archetypes, while 377–463 is the count of quality-filtered activation vectors entering PCA.
 
 **Where it lives:**  
 
@@ -561,31 +581,37 @@ For each case study, the paper plots the per-turn Assistant Axis projection alon
 
 ---
 
-## Extension: Terminal Goal Detection
+## Extension: Model Personality and its Goals
 
 ### What It Is and Why It Matters
 
-The Assistant Axis answers the question *"how Assistant-like is the model right now?"* — but it cannot answer *"what does the persona currently inhabiting the model actually want?"*. This limitation is visible in the paper itself (Section 4.3, Figure 8): both "angel" and "demon" personas sit at similar distances from the Assistant Axis, yet "demon" produces harmful responses at a much higher rate while "angel" does not. An angel is not an assistant-like persona, but it is not malicious either. The Assistant Axis cannot tell them apart.
+The Assistant Axis answers the question *"how Assistant-like is the model right now?"* — but it cannot answer *"what does the persona currently inhabiting the model actually want?"*. This limitation is visible in the paper itself (Section 4.3, Figure 8): both "guardian" and "saboteur" personas can sit at similar distances from the Assistant Axis, yet "saboteur" produces harmful responses at a much higher rate while "guardian" does not. A guardian is not an assistant-like persona, but it is not malicious either. The Assistant Axis cannot tell them apart.
 
-**Terminal goals** are what an agent fundamentally wants — ends in themselves, not means to other ends. A demon's terminal goal is malice and temptation. An angel's terminal goal is obedience to a benevolent god. An assistant's terminal goal (approximately) is being helpful and harmless. These are meaningfully different and, if the linear representation hypothesis holds broadly, should correspond to distinct directions in activation space — directions that are at least partly orthogonal to the Assistant Axis.
+**Terminal goals** are what an agent fundamentally wants — ends in themselves, not means to other ends. A saboteur's terminal goal is to undermine and cause harm. A guardian's terminal goal is to protect and preserve wellbeing. An assistant's terminal goal (approximately) is being helpful and harmless. These are meaningfully different and, if the linear representation hypothesis holds broadly, should correspond to distinct directions in activation space — directions that are at least partly orthogonal to the Assistant Axis.
 
-The most alignment-relevant terminal goal axis is arguably `selfishness ↔ humanitarianism`: how much does the persona's goal align with the wellbeing of humanity as a whole? Any persona high on humanitarianism and low on other terminal goals (destructiveness, self-preservation, dominance) is not going to intentionally harm people, regardless of how far it has drifted from the Assistant. Applying activation capping along a *humanitarianism axis* — using the exact same Equation 1 from Section 5 of the paper, just with a different direction `v` — would be a direct alignment intervention: the model could not drift into a malicious, humanity-threatening persona even if it leaves the Assistant region entirely.
+The most alignment-relevant terminal goal axes are:
+
+- `harm-averse ↔ harm-seeking`: does the persona avoid causing harm, or actively pursue it? This is the most direct safety-relevant dimension — a harm-seeking persona will act against users regardless of how assistant-like it appears stylistically.
+- `corrigible ↔ power-seeking`: is the persona amenable to correction and oversight, or does it resist control and accumulate influence? This captures the AI-safety dimension of instrumental convergence.
+- `cooperative ↔ adversarial`: does the persona work with the user toward shared goals, or treat the interaction as a zero-sum contest?
+
+Applying activation capping along a *harm-aversion axis* — using the exact same Equation 1 from Section 5 of the paper, just with a different direction `v` — would be a direct alignment intervention: the model could not drift into a harm-seeking persona even if it leaves the Assistant region entirely.
 
 **What we gain from detecting terminal goal subspace:**
 
-1. **Distinguish between benign and malicious non-assistant personas.** Angel and demon are both far from the Assistant, but one is safe. Terminal goal axes let us tell them apart before harmful behavior occurs.
-2. **A more principled alignment intervention.** Capping along a humanitarian axis rather than (or in addition to) the Assistant Axis gives a safety guarantee that is more directly connected to what we care about: the model not wanting to harm people.
+1. **Distinguish between benign and malicious non-assistant personas.** A guardian and a saboteur are both far from the Assistant, but one is safe. Terminal goal axes let us tell them apart before harmful behavior occurs.
+2. **A more principled alignment intervention.** Capping along a harm-aversion axis rather than (or in addition to) the Assistant Axis gives a safety guarantee directly tied to harm outcomes, not just behavioral style.
 3. **Interpretable decomposition of persona space.** Separating "what I am" (role/identity dimensions) from "what I want" (goal dimensions) gives a richer map of the model's behavioral possibilities.
 4. **Early warning signal.** Projecting activations onto goal axes during a live conversation gives a real-time signal not just of *stylistic* drift (moving away from the assistant voice) but of *motivational* drift (moving toward harmful intent).
 
 ---
 
-### Experimental Design (from Follow-on Research)
+### Experimental Design
 
 The experimental design extends the paper's role vector methodology by using **role×trait combinations** to factor out goal-related variation from role-related variation:
 
 - **Roles** are pure identities with no implied terminal goal: *architect*, *historian*, *musician*, *chef*. Varying the role while holding the goal trait fixed should activate the role-identity subspace without affecting the goal subspace.
-- **Goal traits** are properties with explicit terminal goals: *humanitarian* ("seeks to benefit all of humanity"), *selfish* ("prioritizes personal gain above all else"), *malicious* ("desires to cause harm and suffering"), *protective* ("devoted to preventing harm to others"). Varying the goal trait while holding the role fixed should activate the goal subspace without affecting the role-identity subspace.
+- **Goal traits** are properties with explicit terminal goals: *harm-averse* ("actively avoids causing harm to others"), *harm-seeking* ("pursues outcomes that damage others"), *corrigible* ("defers to human oversight and correction"), *power-seeking* ("accumulates influence and resists control"), *cooperative* ("works toward shared goals with others"), *adversarial* ("treats interactions as zero-sum contests"). Varying the goal trait while holding the role fixed should activate the goal subspace without affecting the role-identity subspace.
 
 By generating activations for all role×trait combinations (30 roles × 30 goal-traits = 900 combination vectors), we can factor out each component:
 
@@ -596,9 +622,9 @@ For each goal b:  v_b = mean over all roles      → captures goal, averaged ove
 
 Running PCA on `{v_a}` gives the **goal-independent subspace S_A** (pure role/identity structure). Running PCA on `{v_b}` gives the **goal-dependent subspace S_B** (pure goal structure). The key question is then: how orthogonal are S_A and S_B? If they are mostly orthogonal, it means "what I am" and "what I want" are represented in distinct, separable directions in activation space, and we can work with them independently.
 
-The orthogonality is measured using **Principal Angles** between the two subspaces (`scipy.linalg.subspace_angles(S_A_basis, S_B_basis)`). Principal angles close to 90° mean the subspaces are nearly orthogonal (separable); angles near 0° mean they are aligned (entangled). The follow-on research found that the subspaces are separable but not fully orthogonal, with entanglement partly caused by the high anisotropy of activation space (some PCA components have orders-of-magnitude more variance than others). Data whitening — squashing the high-variance PCA components — partially corrects this.
+The orthogonality is measured using **Principal Angles** between the two subspaces (`scipy.linalg.subspace_angles(S_A_basis, S_B_basis)`). Principal angles close to 90° mean the subspaces are nearly orthogonal (separable); angles near 0° mean they are aligned (entangled). The research found that the subspaces are separable but not fully orthogonal, with entanglement partly caused by the high anisotropy of activation space (some PCA components have orders-of-magnitude more variance than others). Data whitening — squashing the high-variance PCA components — partially corrects this.
 
-Within the goal subspace, specific alignment-relevant axes can be extracted using contrastive pairs (e.g., humanitarian vs. selfish activations) and validated using Spearman correlation: rank all role×trait combinations by their projection onto the axis, send the sorted list to an LLM judge asking "what principle governs this ordering?", then correlate that ranking with one derived from the judge's direct assessment of how humanitarian/selfish each combination is. High Spearman ρ confirms the axis is capturing the intended semantic concept.
+Within the goal subspace, specific alignment-relevant axes can be extracted using contrastive pairs (e.g., harm-averse vs. harm-seeking activations) and validated using Spearman correlation: rank all role×trait combinations by their projection onto the axis, send the sorted list to an LLM judge asking "what principle governs this ordering?", then correlate that ranking with one derived from the judge's direct assessment of how harm-averse vs. harm-seeking each combination is. High Spearman ρ confirms the axis is capturing the intended semantic concept.
 
 ---
 
@@ -639,10 +665,10 @@ The existing `src/interventions/capping.py` already supports capping along any a
 **Key functions:**
 
 - `compute_principal_angles(S_A_vecs, S_B_vecs, n_components)` — runs PCA on each set of vectors, then calls `scipy.linalg.subspace_angles()` on the truncated PC bases; returns the angles in degrees and a separability verdict
-- `extract_goal_axis(positive_trait_vecs, negative_trait_vecs)` — computes a contrast vector for a specific goal direction (e.g., humanitarian vectors minus selfish vectors), projects into the goal subspace, returns unit-normalized axis
+- `extract_goal_axis(positive_trait_vecs, negative_trait_vecs)` — computes a contrast vector for a specific goal direction (e.g., harm-averse vectors minus harm-seeking vectors), projects into the goal subspace, returns unit-normalized axis
 - `validate_goal_axis_spearman(axis, combo_vectors, combo_names, judge)` — sorts all role×trait combinations by their projection onto the axis, sends the sorted list to an LLM judge to identify the sorting principle, has the judge directly rank the combinations, computes Spearman ρ between the two rankings; high ρ confirms the axis is semantically coherent
 - `plot_goal_subspace_angles(angles, out_path)` — visualizes the principal angle distribution; near-90° angles support separability
-- `plot_goal_axes_projection(combo_vectors, combo_names, axes_dict, out_path)` — 2-D scatter of combinations projected onto two goal axes (e.g., humanitarian vs. malicious), labeled by role×trait name
+- `plot_goal_axes_projection(combo_vectors, combo_names, axes_dict, out_path)` — 2-D scatter of combinations projected onto two goal axes (e.g., harm-averse vs. power-seeking), labeled by role×trait name
 
 ---
 
@@ -656,10 +682,10 @@ The existing `src/interventions/capping.py` already supports capping along any a
 2. Extract combination vectors (`extraction/combination_vectors.py`)
 3. Compute marginal vectors (v_a per role, v_b per goal-trait)
 4. Run PCA + Principal Angles analysis → assess subspace separability
-5. Extract goal axes: `humanitarian`, `malicious`, `selfishness`, `protective`
+5. Extract goal axes: `harm_averse`, `harm_seeking`, `corrigible`, `power_seeking`, `cooperative`, `adversarial`
 6. Validate each axis with Spearman ρ
-7. Calibrate cap threshold for the humanitarian axis (same `calibrate_cap_threshold()` used for the Assistant Axis)
-8. Optionally: run jailbreak evaluation with humanitarian axis capping and compare to Assistant Axis capping
+7. Calibrate cap threshold for the harm-aversion axis (same `calibrate_cap_threshold()` used for the Assistant Axis)
+8. Optionally: run jailbreak evaluation with harm-aversion axis capping and compare to Assistant Axis capping
 
 **Key command:**
 
@@ -678,15 +704,15 @@ uv run python main.py goal_subspace \
 
 Terminal goal detection and the Assistant Axis are **complementary**, not competing, interventions:
 
-|                       | Assistant Axis                                             | Goal Subspace (Humanitarian Axis)                                   |
+|                       | Assistant Axis                                             | Goal Subspace (Harm-Aversion Axis)                                  |
 | --------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- |
 | **Answers**           | How assistant-like is the model right now?                 | What does the current persona want?                                 |
 | **Detects**           | Stylistic and behavioral drift                             | Motivational / goal-level drift                                     |
-| **Misses**            | Angel vs. demon (both non-assistant)                       | Generic off-character behavior without malicious intent             |
-| **Cap effect**        | Keeps model in assistant voice and style                   | Prevents model from adopting malicious terminal goals               |
+| **Misses**            | Guardian vs. saboteur (both non-assistant)                 | Generic off-character behavior without harmful intent               |
+| **Cap effect**        | Keeps model in assistant voice and style                   | Prevents model from adopting harm-seeking or power-seeking goals    |
 | **Complementary use** | Cap both simultaneously at their respective optimal layers | Capping both provides a stronger safety guarantee than either alone |
 
-The ideal deployment applies capping along both axes simultaneously — the Assistant Axis cap keeps the model behaviorally in the helpful-assistant range, while a humanitarian axis cap ensures that even when the model drifts stylistically, it does not adopt goals that are harmful to users or society. This is achieved trivially in the current codebase by passing both sets of hooks: `model.set_hooks({**assistant_cap_hooks, **humanitarian_cap_hooks})`.
+The ideal deployment applies capping along both axes simultaneously — the Assistant Axis cap keeps the model behaviorally in the helpful-assistant range, while a harm-aversion axis cap ensures that even when the model drifts stylistically, it does not adopt goals that are harmful to users or society. This is achieved trivially in the current codebase by passing both sets of hooks: `model.set_hooks({**assistant_cap_hooks, **harm_aversion_cap_hooks})`.
 
 ---
 
